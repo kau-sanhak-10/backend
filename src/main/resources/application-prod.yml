@@ -1,0 +1,12 @@
+# 프로필이 prod일 때 쓰임
+# 운영 서버 (AWS, main 머지 시 배포, 실제 고객 사용)
+
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+logging:
+  level:
+    com.ilro: info

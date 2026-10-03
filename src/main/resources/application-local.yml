@@ -1,0 +1,6 @@
+# 프로필이 로컬일때 쓰임
+# 각자 PC에서 개발할때
+
+logging:
+  level:
+    com.ilro: debug
