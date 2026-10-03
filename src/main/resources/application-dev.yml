@@ -1,0 +1,7 @@
+# 프로필이 dev일 때 쓰임
+# 개발 서버 (AWS, develop 머지 시 배포, 팀 테스트용)
+
+# 개발 서버(AWS) 설정 — DB(RDS) 등은 배포 세팅 때 추가
+logging:
+  level:
+    com.ilro: debug
