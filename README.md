@@ -43,7 +43,10 @@ cp .env.example .env
 # Mac / Linux / Git Bash
 ./gradlew bootRun
 
-# Windows (cmd · PowerShell)
+# Windows PowerShell (IntelliJ 기본 터미널)
+.\gradlew.bat bootRun
+
+# Windows cmd
 gradlew.bat bootRun
 ```
 
