@@ -4,3 +4,14 @@
 logging:
   level:
     com.ilro: debug
+
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/ilro}
+    username: ${DB_USERNAME:ilro}
+    password: ${DB_PASSWORD:ilro}
+
+management:
+  endpoint:
+    health:
+      show-details: always
