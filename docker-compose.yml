@@ -1,3 +1,5 @@
+name: ilro
+
 services:
   postgres:
     image: postgres:17
