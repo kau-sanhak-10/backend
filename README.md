@@ -13,8 +13,9 @@
 - Spring Boot Actuator (서버 상태 확인)
 - Springdoc OpenAPI (Swagger UI)
 - Lombok
+- GitHub Actions (CI: PR 빌드·테스트)
 
-> Redis · CI/CD는 이후 PR에서 추가되며, 추가될 때 이 문서도 같이 갱신합니다.
+> Redis · CD(자동 배포)는 이후 PR에서 추가되며, 추가될 때 이 문서도 같이 갱신합니다.
 
 ## 필요 환경
 
@@ -125,6 +126,18 @@ gradlew.bat bootRun
 | --- | --- | --- |
 | 서버 상태 | http://localhost:8080/actuator/health | 응답에 `"status":"UP"` 포함, `db` 항목도 `UP` |
 | API 문서 (Swagger) | http://localhost:8080/swagger-ui.html | Swagger 화면이 열림 |
+
+## CI (GitHub Actions)
+
+`develop`·`main`으로 PR을 올리거나 커밋을 추가하면 자동으로 빌드와 테스트가 실행됩니다 (`.github/workflows/ci.yml`).
+
+- CI 안에서 테스트용 PostgreSQL 17을 띄워서 실행합니다 (로컬 `docker-compose.yml`과 같은 값)
+- **CI가 실패하면 머지할 수 없습니다.** PR 아래쪽 체크에서 `Details`를 눌러 실패한 단계의 로그를 확인하세요
+- PR 올리기 전에 로컬에서 미리 확인하려면 DB를 띄운 상태에서 아래를 실행합니다
+
+```bash
+./gradlew build
+```
 
 ## DB 변경 규칙 (Flyway)
 
