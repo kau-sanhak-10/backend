@@ -32,7 +32,8 @@ dependencies {
     testAnnotationProcessor 'org.projectlombok:lombok'
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.1'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
-    runtimeOnly 'org.postgresql:postgresql'
+    // 제약 이름을 PSQLException에서 읽으므로 컴파일에도 필요 (ConstraintErrorMapper)
+    implementation 'org.postgresql:postgresql'
     implementation 'org.springframework.boot:spring-boot-starter-flyway'
     implementation 'org.flywaydb:flyway-database-postgresql'
 }

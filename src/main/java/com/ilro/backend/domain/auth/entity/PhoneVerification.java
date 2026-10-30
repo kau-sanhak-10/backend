@@ -1,13 +1,18 @@
 package com.ilro.backend.domain.auth.entity;
 
+import com.ilro.backend.domain.inquiry.entity.Inquiry;
+import com.ilro.backend.domain.owner.entity.Owner;
 import com.ilro.backend.global.entity.BaseCreatedEntity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
+import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import lombok.AccessLevel;
 import lombok.Builder;
@@ -51,13 +56,31 @@ public class PhoneVerification extends BaseCreatedEntity {
 
     private Instant verifiedAt;
 
+    // 인증 대상 - 같은 번호·목적이라도 대상이 다르면 이 인증을 쓰지 않음
+    // CUSTOMER_VERIFY: 그 문의 / OWNER_LOGIN: 그 업체 / INQUIRY_ACCESS·RESERVATION_LOOKUP: 링크의 업체
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "target_inquiry_id")
+    private Inquiry targetInquiry;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "target_owner_id")
+    private Owner targetOwner;
+
+    // IP별 누적 발송 제한 기준
+    @Column(length = 45)
+    private String requestIp;
+
     @Builder
     private PhoneVerification(String phone, VerificationPurpose purpose, String codeHash,
-                              VerificationSendStatus sendStatus, Instant expiresAt) {
+                              VerificationSendStatus sendStatus, Instant expiresAt, Inquiry targetInquiry,
+                              Owner targetOwner, String requestIp) {
         this.phone = phone;
         this.purpose = purpose;
         this.codeHash = codeHash;
         this.sendStatus = sendStatus;
         this.expiresAt = expiresAt;
+        this.targetInquiry = targetInquiry;
+        this.targetOwner = targetOwner;
+        this.requestIp = requestIp;
     }
 }
