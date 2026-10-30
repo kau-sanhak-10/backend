@@ -7,5 +7,7 @@ public enum ReservationChangeStatus {
     ACCEPTED, // 고객 수락, 서버 검사 중
     REJECTED, // 고객이 제안 거절
     APPLIED, // 변경 확정
-    FAILED // 최종 검사 실패
+    FAILED, // 최종 검사 실패
+    EXPIRED, // 제안 기한 지남 (기존 예약 유지)
+    CLOSED // 진행 중에 예약 취소·사장님이 요청 닫음 (closeReason)
 }
