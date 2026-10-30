@@ -53,4 +53,10 @@ public class OwnerBusinessHour {
         this.closeTime = closeTime;
         this.isClosed = isClosed;
     }
+
+    public void update(LocalTime openTime, LocalTime closeTime, boolean isClosed) {
+        this.openTime = openTime;
+        this.closeTime = closeTime;
+        this.isClosed = isClosed;
+    }
 }

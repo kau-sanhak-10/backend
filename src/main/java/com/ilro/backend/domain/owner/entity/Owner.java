@@ -123,4 +123,44 @@ public class Owner extends BaseTimeEntity {
         this.phone = phone;
         this.linkToken = linkToken;
     }
+
+    // 대표자 이름 (B-03) - 로그인 번호는 운영팀만 바꿈 (O-03)
+    public void changeOwnerName(String ownerName) {
+        this.ownerName = ownerName;
+    }
+
+    // 업체 정보 (B-05) - 출발지 주소와 좌표는 함께 바뀜
+    public void updateBusinessInfo(String businessName, String contactPhone, String address, BigDecimal lat,
+                                   BigDecimal lng, String customerNotice, String serviceDescription) {
+        this.businessName = businessName;
+        this.contactPhone = contactPhone;
+        this.address = address;
+        this.lat = lat;
+        this.lng = lng;
+        this.customerNotice = customerNotice;
+        this.serviceDescription = serviceDescription;
+    }
+
+    // 예약 기준 (B-07·B-08) - 기존 예약은 바꾸지 않음
+    public void updateBookingRules(LocalTime lunchStart, LocalTime lunchEnd, Integer maxDailyVisits,
+                                   int bufferMinutes, TravelMode travelMode) {
+        this.lunchStart = lunchStart;
+        this.lunchEnd = lunchEnd;
+        this.maxDailyVisits = maxDailyVisits;
+        this.bufferMinutes = bufferMinutes;
+        this.travelMode = travelMode;
+    }
+
+    public void changeAutoBooking(boolean enabled) {
+        this.autoBookingEnabled = enabled;
+    }
+
+    // 신규 접수 중지·재개 (B-09)
+    public void changeIntakePaused(boolean paused) {
+        this.intakePaused = paused;
+    }
+
+    public boolean hasStartAddress() {
+        return address != null && lat != null && lng != null;
+    }
 }

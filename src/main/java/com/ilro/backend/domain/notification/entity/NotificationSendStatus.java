@@ -4,5 +4,6 @@ package com.ilro.backend.domain.notification.entity;
 public enum NotificationSendStatus {
     PENDING,
     SENT,
-    FAILED
+    FAILED,
+    SKIPPED // 재시도 직전에 보니 보낼 필요가 없어짐 (취소된 예약의 확정 알림 등)
 }

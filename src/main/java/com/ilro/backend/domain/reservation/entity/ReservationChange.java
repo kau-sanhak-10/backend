@@ -75,6 +75,19 @@ public class ReservationChange extends BaseCreatedEntity {
 
     private Instant resolvedAt;
 
+    // 사장님 제안 기한 - 제안 후 24시간과 제안 방문 2시간 전 중 빠른 시각, 지나면 EXPIRED
+    private Instant expiresAt;
+
+    // CLOSED일 때 이유
+    @Enumerated(EnumType.STRING)
+    @Column(length = 30)
+    private ReservationChangeCloseReason closeReason;
+
+    // 요청을 끝낸 쪽 (SYSTEM = 만료·자동 종료)
+    @Enumerated(EnumType.STRING)
+    @Column(length = 20)
+    private ChangedBy resolvedBy;
+
     // 요청 당시 reservation.version - 반영할 때 현재 버전과 다르면 덮어쓰지 않고 재조회
     @Column(nullable = false)
     private int baseVersion;
@@ -83,7 +96,7 @@ public class ReservationChange extends BaseCreatedEntity {
     private ReservationChange(Reservation reservation, ReservationChangeType changeType, RequestedBy requestedBy,
                               String requestNote, Instant prevStartAt, Instant prevEndAt, String prevAddress,
                               Instant proposedStartAt, Instant proposedEndAt, String proposedAddress,
-                              BigDecimal proposedLat, BigDecimal proposedLng, int baseVersion) {
+                              BigDecimal proposedLat, BigDecimal proposedLng, Instant expiresAt, int baseVersion) {
         this.reservation = reservation;
         this.changeType = changeType;
         this.requestedBy = requestedBy;
@@ -96,6 +109,7 @@ public class ReservationChange extends BaseCreatedEntity {
         this.proposedAddress = proposedAddress;
         this.proposedLat = proposedLat;
         this.proposedLng = proposedLng;
+        this.expiresAt = expiresAt;
         this.baseVersion = baseVersion;
     }
 }

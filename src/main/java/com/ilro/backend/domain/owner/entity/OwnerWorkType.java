@@ -43,10 +43,22 @@ public class OwnerWorkType {
     @Column(nullable = false)
     private boolean isActive = true;
 
+    // 이 작업을 자동 예약해도 되는지 - 제공 여부(isActive)와 별개, 제공하는 작업만 켤 수 있음
+    // 업체 자동 예약(owner.autoBookingEnabled)과 둘 다 켜져야 자동 예약
+    @Column(nullable = false)
+    private boolean autoBookingAllowed = false;
+
     @Builder
     private OwnerWorkType(Owner owner, WorkCategory workCategory, int durationMinutes) {
         this.owner = owner;
         this.workCategory = workCategory;
         this.durationMinutes = durationMinutes;
+    }
+
+    // 제공을 끄면 자동 예약 허용도 같이 꺼짐 (ck_owner_work_type_auto_booking)
+    public void update(boolean isActive, int durationMinutes, boolean autoBookingAllowed) {
+        this.isActive = isActive;
+        this.durationMinutes = durationMinutes;
+        this.autoBookingAllowed = isActive && autoBookingAllowed;
     }
 }

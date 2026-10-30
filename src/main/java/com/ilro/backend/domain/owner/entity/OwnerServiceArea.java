@@ -43,4 +43,8 @@ public class OwnerServiceArea {
         this.regionCode = regionCode;
         this.regionName = regionName;
     }
+
+    public void rename(String regionName) {
+        this.regionName = regionName;
+    }
 }
