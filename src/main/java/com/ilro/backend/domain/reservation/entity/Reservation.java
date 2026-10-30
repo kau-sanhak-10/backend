@@ -87,6 +87,10 @@ public class Reservation extends BaseTimeEntity {
     @Column(length = 64)
     private String idempotencyKey;
 
+    // 요청 지문 SHA-256(경로 + 요청 주체 + 정규화한 본문) - 같은 키로 다른 요청이 오면 409, 키와 같이 있거나 같이 없음
+    @Column(length = 64)
+    private String idempotencyHash;
+
     // 낙관적 잠금 - 변경 수락과 취소 동시 처리 방지 (B19·B21)
     @Version
     @Column(nullable = false)
@@ -96,7 +100,7 @@ public class Reservation extends BaseTimeEntity {
     private Reservation(Inquiry inquiry, Owner owner, Customer customer, Instant startAt, Instant endAt,
                         String address, BigDecimal lat, BigDecimal lng, OwnerWorkType workType,
                         Integer travelTimeMinutes, Integer workMinutes, Integer bufferMinutes, boolean isManual,
-                        String idempotencyKey) {
+                        String idempotencyKey, String idempotencyHash) {
         this.inquiry = inquiry;
         this.owner = owner;
         this.customer = customer;
@@ -111,5 +115,6 @@ public class Reservation extends BaseTimeEntity {
         this.bufferMinutes = bufferMinutes;
         this.isManual = isManual;
         this.idempotencyKey = idempotencyKey;
+        this.idempotencyHash = idempotencyHash;
     }
 }

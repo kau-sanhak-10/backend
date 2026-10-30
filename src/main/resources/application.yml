@@ -15,7 +15,13 @@ spring:
 
 server:
   port: ${SERVER_PORT:8080}
+  # 프록시(로드밸런서·nginx) 뒤에서 X-Forwarded-For의 실제 고객 IP를 씀 (인증번호 IP별 발송 제한)
+  # 내부망 프록시가 보낸 헤더만 믿음 (Tomcat RemoteIpValve 기본값)
+  forward-headers-strategy: native
 
 app:
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}
+  auth:
+    # 인증번호 해시(HMAC) 비밀값 - DB가 새어도 6자리 번호를 되돌리지 못하게. 운영(prod)은 환경변수 필수
+    code-pepper: ${AUTH_CODE_PEPPER:local-only-code-pepper}

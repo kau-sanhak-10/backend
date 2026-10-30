@@ -58,6 +58,11 @@ public class InquiryField extends BaseCreatedEntity {
     @JoinColumn(name = "ai_decision_id")
     private AiDecision aiDecision;
 
+    // 근거 메시지 - 고객 설명에서 나온 값일 때 (같은 문의의 메시지만)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "message_id")
+    private Message message;
+
     // 사장님 확인이 필요한 이유 (C05)
     @Column(length = 100)
     private String unconfirmedReason;
@@ -68,7 +73,8 @@ public class InquiryField extends BaseCreatedEntity {
 
     @Builder
     private InquiryField(Inquiry inquiry, String fieldKey, String fieldValue, InquiryFieldSource source,
-                         InquiryFieldStatus status, Photo photo, AiDecision aiDecision, String unconfirmedReason) {
+                         InquiryFieldStatus status, Photo photo, AiDecision aiDecision, Message message,
+                         String unconfirmedReason) {
         this.inquiry = inquiry;
         this.fieldKey = fieldKey;
         this.fieldValue = fieldValue;
@@ -76,6 +82,7 @@ public class InquiryField extends BaseCreatedEntity {
         this.status = status;
         this.photo = photo;
         this.aiDecision = aiDecision;
+        this.message = message;
         this.unconfirmedReason = unconfirmedReason;
     }
 }

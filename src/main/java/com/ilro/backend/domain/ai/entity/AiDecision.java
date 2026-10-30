@@ -72,8 +72,9 @@ public class AiDecision extends BaseCreatedEntity {
     @Column(precision = 3, scale = 2)
     private BigDecimal confidence;
 
+    // SUCCESS면 필수, 실패·형식 오류·오래된 결과는 null 가능
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 30)
+    @Column(length = 30)
     private AiAction action;
 
     @Enumerated(EnumType.STRING)
@@ -102,12 +103,19 @@ public class AiDecision extends BaseCreatedEntity {
     @Column(length = 50)
     private String ruleVersion;
 
+    // 요청 때의 Inquiry.aiInputSeq - 결과가 올 때 순번이 더 올랐으면 적용하지 않고 STALE
+    private Long inputVersion;
+
+    // AI 요청 ID - 같은 요청의 결과는 한 번만 적용
+    @Column(length = 64)
+    private String requestId;
+
     @Builder
     private AiDecision(Inquiry inquiry, Message message, AiStage stage, String modelName, String promptVersion,
                        String inputSnapshot, String outputRaw, AiIntent intent, BigDecimal confidence,
                        AiAction action, RuleReason ruleReason, DecidedBy decidedBy, Integer latencyMs,
                        Integer inputTokens, Integer outputTokens, AiDecisionStatus status, String errorMessage,
-                       String ruleVersion) {
+                       String ruleVersion, Long inputVersion, String requestId) {
         this.inquiry = inquiry;
         this.message = message;
         this.stage = stage;
@@ -126,5 +134,7 @@ public class AiDecision extends BaseCreatedEntity {
         this.status = status;
         this.errorMessage = errorMessage;
         this.ruleVersion = ruleVersion;
+        this.inputVersion = inputVersion;
+        this.requestId = requestId;
     }
 }

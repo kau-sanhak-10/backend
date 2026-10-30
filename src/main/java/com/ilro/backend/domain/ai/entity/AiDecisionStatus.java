@@ -4,5 +4,7 @@ package com.ilro.backend.domain.ai.entity;
 public enum AiDecisionStatus {
     SUCCESS,
     FAILED,
-    TIMEOUT
+    TIMEOUT,
+    INVALID_OUTPUT, // 모델 출력이 형식에 안 맞음 (다시 요청 1회 후에도)
+    STALE // 결과가 오는 사이 새 입력이 들어와 적용하지 않음
 }

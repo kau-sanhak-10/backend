@@ -45,10 +45,6 @@ public class Inquiry extends BaseTimeEntity {
     @JoinColumn(name = "customer_id")
     private Customer customer;
 
-    // 문의 접근 토큰의 SHA-256 해시 (원문은 DB에 저장하지 않음)
-    @Column(nullable = false, length = 64)
-    private String tokenHash;
-
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private InquiryStatus status = InquiryStatus.COLLECTING;
@@ -104,6 +100,11 @@ public class Inquiry extends BaseTimeEntity {
     @Column(nullable = false)
     private Integer version;
 
+    // AI 입력 순번 - AI 결과가 오래됐는지 판단 (version과 따로 오름)
+    // InquiryRepository.incrementAiInputSeq로만 올림. Entity 저장이 덮어쓰지 않게 insert·update에서 제외
+    @Column(nullable = false, insertable = false, updatable = false)
+    private long aiInputSeq;
+
     // true면 자동 예약·AI 재개 차단 (C09·B16)
     @Column(nullable = false)
     private boolean safetyFlag = false;
@@ -111,9 +112,6 @@ public class Inquiry extends BaseTimeEntity {
     // AI 요약 (B13), 생성 실패 시 null
     @Column(columnDefinition = "text")
     private String aiSummary;
-
-    // 토큰 만료
-    private Instant expiresAt;
 
     // 값이 있으면 목록·상세 조회 차단 (B12·O09)
     private Instant deletedAt;
@@ -125,10 +123,8 @@ public class Inquiry extends BaseTimeEntity {
     private Instant phoneVerifiedAt;
 
     @Builder
-    private Inquiry(Owner owner, Customer customer, String tokenHash, Instant expiresAt) {
+    private Inquiry(Owner owner, Customer customer) {
         this.owner = owner;
         this.customer = customer;
-        this.tokenHash = tokenHash;
-        this.expiresAt = expiresAt;
     }
 }

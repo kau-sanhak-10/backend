@@ -10,3 +10,7 @@ springdoc:
 logging:
   level:
     com.ilro: info
+app:
+  auth:
+    # 기본값 없음 - 환경변수가 없으면 서버가 뜨지 않음
+    code-pepper: ${AUTH_CODE_PEPPER}
