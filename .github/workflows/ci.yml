@@ -1,0 +1,68 @@
+name: Backend CI
+
+on:
+  # develop·main으로 들어가는 PR을 올리거나 커밋을 추가할 때
+  pull_request:
+    branches: [develop, main]
+  # develop·main에 머지됐을 때
+  push:
+    branches: [develop, main]
+  # Actions 탭에서 수동 실행
+  workflow_dispatch:
+
+concurrency:
+  # 같은 브랜치의 이전 실행은 취소하고 최신 커밋만 검사
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  # 코드 읽기만 허용
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # 테스트용 PostgreSQL (로컬 docker-compose.yml과 같은 값)
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: ilro
+          POSTGRES_USER: ilro
+          POSTGRES_PASSWORD: ilro
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ilro"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # application-local.yml의 기본 DB 값(localhost:5432/ilro)을 그대로 사용
+      SPRING_PROFILES_ACTIVE: local
+
+    steps:
+      - name: 코드 가져오기
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: JDK 21 설치
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Gradle 설정 (의존성 캐시 포함)
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: gradlew 실행 권한
+        # Windows에서 커밋한 gradlew는 Linux에서 실행 권한이 없을 수 있음
+        run: chmod +x gradlew
+
+      - name: 빌드 + 테스트
+        # 컴파일, 테스트(contextLoads 포함: Flyway·JPA 시작 검증)
+        run: ./gradlew build
