@@ -23,6 +23,8 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.HexFormat;
 import java.util.Map;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import java.util.List;
 
 // 솔라피로 실제 문자 발송 (dev·prod). local은 LogSmsSender
 // 실패(오류 응답·타임아웃·연결 실패)는 예외 대신 FAILED로 돌려줌 → 인증 로직이 발송 실패로 저장
@@ -62,13 +64,19 @@ public class RealSmsSender implements SmsSender {
     @Override
     public SmsSendResult send(String phone, String message) {
         try {
-            restClient.post()
-                    .uri("/messages/v4/send")
+            SendResponse response = restClient.post()
+                    .uri("/messages/v4/send-many/fast")
                     .header("Authorization", authorization())
                     .contentType(MediaType.APPLICATION_JSON)
-                    .body(Map.of("message", Map.of("to", phone, "from", sender, "text", message)))
+                    .body(Map.of("messages", List.of(Map.of("to", phone, "from", sender, "text", message))))
                     .retrieve()
-                    .toBodilessEntity();
+                    .body(SendResponse.class);
+            // 2xx여도 접수 실패한 메시지는 failedMessageList로 옴 (번호 형식·발신번호 미등록 등)
+            if (response == null || (response.failedMessageList() != null && !response.failedMessageList().isEmpty())) {
+                String reason = response == null ? "empty" : response.failedMessageList().get(0).statusCode();
+                log.warn("SMS not accepted: to={}, statusCode={}", PhoneNumbers.mask(phone), reason);
+                return SmsSendResult.FAILED;
+            }
             return SmsSendResult.SENT;
         } catch (RestClientResponseException e) {
             // 솔라피가 거절 (키·허용 IP·잔액·번호 문제 등)
@@ -87,7 +95,7 @@ public class RealSmsSender implements SmsSender {
         byte[] saltBytes = new byte[16];
         RANDOM.nextBytes(saltBytes);
         String salt = HexFormat.of().formatHex(saltBytes);
-        return "HMAC-SHA256 apiKey=" + apiKey + ", date=" + date + ", salt=" + salt
+        return "HMAC-SHA256 Apikey=" + apiKey + ", Date=" + date + ", salt=" + salt
                 + ", signature=" + hmacSha256(apiSecret, date + salt);
     }
 
@@ -114,5 +122,13 @@ public class RealSmsSender implements SmsSender {
             throw new IllegalStateException(name + " 설정이 필요합니다");
         }
         return value;
+    }
+
+    // 솔라피 응답 중 접수 실패 목록만 사용 (나머지 칸은 무시)
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record SendResponse(List<FailedMessage> failedMessageList) {
+        @JsonIgnoreProperties(ignoreUnknown = true)
+        record FailedMessage(String statusCode, String statusMessage) {
+        }
     }
 }

@@ -33,7 +33,7 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 
 class RealSmsSenderTest {
 
-    private static final String SEND_URL = "https://api.solapi.com/messages/v4/send";
+    private static final String SEND_URL = "https://api.solapi.com/messages/v4/send-many/fast";
     private static final String API_KEY = "test-key";
     private static final String API_SECRET = "test-secret";
     private static final String SENDER = "01000000000";
@@ -41,7 +41,7 @@ class RealSmsSenderTest {
     private static final String TEXT = "[일로] 인증번호는 123456입니다.";
     private static final Instant NOW = Instant.parse("2026-11-03T12:00:00Z");
     private static final Pattern AUTHORIZATION = Pattern.compile(
-            "HMAC-SHA256 apiKey=([^,]+), date=([^,]+), salt=([0-9a-f]+), signature=([0-9a-f]{64})");
+            "HMAC-SHA256 Apikey=([^,]+), Date=([^,]+), salt=([0-9a-f]+), signature=([0-9a-f]{64})");
 
     private MockRestServiceServer server;
     private RealSmsSender sender;
@@ -60,14 +60,25 @@ class RealSmsSenderTest {
         server.expect(requestTo(SEND_URL))
                 .andExpect(method(HttpMethod.POST))
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.message.to").value(TO))
-                .andExpect(jsonPath("$.message.from").value(SENDER))
-                .andExpect(jsonPath("$.message.text").value(TEXT))
+                .andExpect(jsonPath("$.messages[0].to").value(TO))
+                .andExpect(jsonPath("$.messages[0].from").value(SENDER))
+                .andExpect(jsonPath("$.messages[0].text").value(TEXT))
                 .andExpect(request -> assertAuthorization(request.getHeaders().getFirst("Authorization")))
-                .andRespond(withSuccess("{\"statusCode\":\"2000\"}", MediaType.APPLICATION_JSON));
+                .andRespond(withSuccess("{\"failedMessageList\":[],\"messageList\":[{\"statusCode\":\"2000\"}]}",
+                        MediaType.APPLICATION_JSON));
 
         assertThat(sender.send(TO, TEXT)).isEqualTo(SmsSendResult.SENT);
         server.verify();
+    }
+
+    @Test
+    @DisplayName("200이어도 failedMessageList에 실패가 있으면 FAILED (번호 형식·발신번호 문제 등)")
+    void notAccepted() {
+        server.expect(requestTo(SEND_URL)).andRespond(withSuccess(
+                "{\"failedMessageList\":[{\"to\":\"" + TO + "\",\"statusCode\":\"1062\",\"statusMessage\":\"발신번호 미등록\"}]}",
+                MediaType.APPLICATION_JSON));
+
+        assertThat(sender.send(TO, TEXT)).isEqualTo(SmsSendResult.FAILED);
     }
 
     @Test
