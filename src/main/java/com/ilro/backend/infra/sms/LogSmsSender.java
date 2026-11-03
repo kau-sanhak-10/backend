@@ -6,7 +6,7 @@ import org.springframework.stereotype.Component;
 
 @Slf4j
 @Component
-@Profile({"local", "dev"})
+@Profile({"local"})
 public class LogSmsSender implements SmsSender {
 
     @Override

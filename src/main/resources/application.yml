@@ -25,3 +25,10 @@ app:
   auth:
     # 인증번호 해시(HMAC) 비밀값 - DB가 새어도 6자리 번호를 되돌리지 못하게. 운영(prod)은 환경변수 필수
     code-pepper: ${AUTH_CODE_PEPPER:local-only-code-pepper}
+  sms:
+    # 발신번호 (솔라피에 등록된 번호, 숫자만)
+    sender: ${SMS_SENDER_NUMBER:}
+    solapi:
+      api-key: ${SOLAPI_API_KEY:}
+      api-secret: ${SOLAPI_API_SECRET:}
+      base-url: https://api.solapi.com
