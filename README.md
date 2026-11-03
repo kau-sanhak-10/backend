@@ -182,8 +182,8 @@ com.ilro.backend
 **문자 발송** — `SmsSender`를 주입받아 `send(전화번호, 내용)`만 호출합니다.
 
 - 결과는 `SENT` / `FAILED`로 돌려주며 **예외를 던지지 않습니다**
-- `local`·`dev`에서는 `LogSmsSender`가 실제 문자 대신 **콘솔에 로그로 출력**합니다 (전화번호는 가운데를 가림). 인증번호는 IntelliJ 콘솔에서 확인하세요
-- `prod`에서는 실제 문자 발송 구현체가 사용됩니다 (추후 추가)
+- `local`에서는 `LogSmsSender`가 실제 문자 대신 **콘솔에 로그로 출력**합니다 (전화번호는 가운데를 가림). 인증번호는 IntelliJ 콘솔에서 확인하세요
+- `dev`·`prod` 서버에서는 `RealSmsSender`가 **솔라피로 실제 문자를 보냅니다**. 키·발신번호는 Parameter Store(`/ilro/{dev,prod}/SOLAPI_API_KEY`·`SOLAPI_API_SECRET`·`SMS_SENDER_NUMBER`)에서 주입되고, 값이 비어 있으면 서버가 뜨지 않습니다
 
 ## 더 자세한 가이드
 
