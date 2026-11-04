@@ -11,14 +11,7 @@ public class LogSmsSender implements SmsSender {
 
     @Override
     public SmsSendResult send(String phone, String message) {
-        log.info("[가짜 문자] to={}, message={}", mask(phone), message);
+        log.info("[가짜 문자] 발송 요청 처리 (수신번호·본문 기록 안 함)");
         return SmsSendResult.SENT;
-    }
-
-    private String mask(String phone) {
-        if (phone == null || phone.length() < 8) {
-            return "****";
-        }
-        return phone.substring(0, 3) + "****" + phone.substring(phone.length() - 4);
     }
 }
