@@ -32,3 +32,6 @@ app:
       api-key: ${SOLAPI_API_KEY:}
       api-secret: ${SOLAPI_API_SECRET:}
       base-url: https://api.solapi.com
+  intake:
+    # 고객 접수 화면 주소 (로컬 기본값, 서버는 Parameter Store)
+    base-url: ${INTAKE_LINK_BASE_URL:http://localhost:3000}

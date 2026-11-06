@@ -17,7 +17,8 @@ public enum OwnerErrorCode implements ErrorCode {
 
     OWNER_PHONE_DUPLICATED(HttpStatus.CONFLICT, "OWNER_PHONE_DUPLICATED", "같은 로그인 번호로 등록된 업체가 있습니다"),
     WORK_TYPE_DUPLICATED(HttpStatus.CONFLICT, "WORK_TYPE_DUPLICATED", "이미 등록된 작업 종류입니다"),
-    SERVICE_AREA_DUPLICATED(HttpStatus.CONFLICT, "SERVICE_AREA_DUPLICATED", "이미 등록된 서비스 지역입니다");
+    SERVICE_AREA_DUPLICATED(HttpStatus.CONFLICT, "SERVICE_AREA_DUPLICATED", "이미 등록된 서비스 지역입니다"),
+    OWNER_NOT_APPROVED(HttpStatus.CONFLICT, "OWNER_NOT_APPROVED", "승인된 업체에만 접수 링크를 발급할 수 있습니다");
 
     private final HttpStatus status;
     private final String code;
