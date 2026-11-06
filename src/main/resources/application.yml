@@ -33,5 +33,20 @@ app:
       api-secret: ${SOLAPI_API_SECRET:}
       base-url: https://api.solapi.com
   intake:
+    # 고객이 동의하는 약관 버전 - 약관을 바꾸면 이 값만 올림, 이전 버전 동의로는 새 상담을 시작할 수 없음
+    terms-version: ${INTAKE_TERMS_VERSION:2026-10-v1}
     # 고객 접수 화면 주소 (로컬 기본값, 서버는 Parameter Store)
     base-url: ${INTAKE_LINK_BASE_URL:http://localhost:3000}
+  ai:
+    # 고객 메시지가 오면 AI 서버에 문의 분석을 맡김 (명세 6장)
+    enabled: ${AI_ENABLED:true}
+    # fake: AI 서버 없이 가짜 답변 (로컬·프론트 개발, AI 서버 연결 전) / http: 실제 AI 서버
+    mode: ${AI_MODE:fake}
+    base-url: ${AI_BASE_URL:http://localhost:8000}
+    # AI 서버와 같이 쓰는 내부 키 (X-Internal-Key)
+    internal-key: ${AI_INTERNAL_KEY:local-only-internal-key}
+    # 같은 입력은 최초 포함 최대 2회, 시도당 30초, 전체 60초 (10/26 결정)
+    attempt-timeout: 30s
+    total-budget: 60s
+    # 답이 없는 고객 메시지를 다시 확인하는 간격 (서버 재시작·대기열 가득 참 대비)
+    sweep-interval: PT1M

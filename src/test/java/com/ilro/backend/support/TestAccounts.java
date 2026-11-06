@@ -72,11 +72,30 @@ public class TestAccounts {
         return raw;
     }
 
+    public String linkToken(long ownerId) {
+        return jdbc.queryForObject("SELECT link_token FROM owner WHERE id = ?", String.class, ownerId);
+    }
+
     public void cleanUp() {
         for (Long ownerId : ownerIds) {
             jdbc.update("DELETE FROM auth_token WHERE owner_id = ?", ownerId);
             jdbc.update("DELETE FROM phone_verification WHERE target_owner_id = ?", ownerId);
             jdbc.update("DELETE FROM reservation WHERE owner_id = ?", ownerId);
+            // 고객 상담 - 자식 행부터
+            String inquiries = "(SELECT id FROM inquiry WHERE owner_id = ?)";
+            jdbc.update("DELETE FROM auth_token WHERE inquiry_id IN " + inquiries, ownerId);
+            jdbc.update("DELETE FROM phone_verification WHERE target_inquiry_id IN " + inquiries, ownerId);
+            jdbc.update("DELETE FROM inquiry_field WHERE inquiry_id IN " + inquiries, ownerId);
+            jdbc.update("DELETE FROM photo WHERE inquiry_id IN " + inquiries, ownerId);
+            // AI 답변 → AI 판단 → 고객 메시지 (서로 가리킴)
+            jdbc.update("DELETE FROM message WHERE ai_decision_id IS NOT NULL AND inquiry_id IN " + inquiries,
+                    ownerId);
+            jdbc.update("DELETE FROM ai_decision WHERE inquiry_id IN " + inquiries, ownerId);
+            jdbc.update("DELETE FROM message WHERE inquiry_id IN " + inquiries, ownerId);
+            jdbc.update("DELETE FROM consent WHERE inquiry_id IN " + inquiries, ownerId);
+            jdbc.update("DELETE FROM inquiry WHERE owner_id = ?", ownerId);
+            jdbc.update("DELETE FROM customer WHERE owner_id = ?", ownerId);
+            jdbc.update("DELETE FROM notification WHERE owner_id = ?", ownerId);
             jdbc.update("DELETE FROM owner_block WHERE owner_id = ?", ownerId);
             jdbc.update("DELETE FROM owner_business_hour WHERE owner_id = ?", ownerId);
             jdbc.update("DELETE FROM owner_service_area WHERE owner_id = ?", ownerId);

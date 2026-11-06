@@ -62,4 +62,14 @@ public class Photo extends BaseCreatedEntity {
         this.mimeType = mimeType;
         this.sizeBytes = sizeBytes;
     }
+
+    // 업로드가 끝났고 아직 어느 메시지에도 붙지 않은 사진
+    public boolean isAttachable() {
+        return uploadStatus == PhotoUploadStatus.DONE && message == null;
+    }
+
+    // 사진을 보낸 메시지에 연결 - 같은 문의의 메시지만 (DB 복합 FK)
+    public void attachTo(Message message) {
+        this.message = message;
+    }
 }

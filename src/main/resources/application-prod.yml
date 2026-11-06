@@ -14,5 +14,10 @@ app:
   auth:
     # 기본값 없음 - 환경변수가 없으면 서버가 뜨지 않음
     code-pepper: ${AUTH_CODE_PEPPER}
+  ai:
+    # 운영은 실제 AI 서버만 - 주소·내부 키는 환경변수 필수
+    mode: ${AI_MODE:http}
+    base-url: ${AI_BASE_URL}
+    internal-key: ${AI_INTERNAL_KEY}
   intake:
     base-url: ${INTAKE_LINK_BASE_URL}

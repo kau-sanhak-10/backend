@@ -24,6 +24,7 @@ import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Objects;
 
 // 고객 문의(상담) 1건
 @Getter
@@ -126,5 +127,61 @@ public class Inquiry extends BaseTimeEntity {
     private Inquiry(Owner owner, Customer customer) {
         this.owner = owner;
         this.customer = customer;
+    }
+
+    public boolean isDeleted() {
+        return deletedAt != null;
+    }
+
+    // AI가 답하는 상담 - AI 응대 중이고 정보 수집·시간 선택 단계일 때만
+    // 사장님 확인·예약·서비스 불가·종료 단계는 사장님이 이어감
+    public boolean isAiAnswering() {
+        return handlerMode == HandlerMode.AI
+                && (status == InquiryStatus.COLLECTING || status == InquiryStatus.SCHEDULING);
+    }
+
+    // AI 판단·사장님 확인 전환에 따른 진행 단계 (명세 2.1·6.4)
+    public void changeStatus(InquiryStatus status) {
+        this.status = status;
+    }
+
+    // 안전 신호 - 자동 예약·AI 재개 차단 (C09·B16)
+    public void flagSafety() {
+        this.safetyFlag = true;
+    }
+
+    // 고객 방문정보 (C-06) - 연락처를 다른 번호로 바꾸면 그 번호로 다시 인증해야 예약 확정 가능 (명세 1.5)
+    public void updateVisitInfo(Customer customer, String address, String addressDetail, BigDecimal lat,
+                                BigDecimal lng, String accessNote) {
+        if (this.customer == null || !this.customer.getPhone().equals(customer.getPhone())) {
+            this.phoneVerifiedAt = null;
+        }
+        this.customer = customer;
+        this.address = address;
+        this.addressDetail = addressDetail;
+        this.lat = lat;
+        this.lng = lng;
+        this.accessNote = accessNote;
+    }
+
+    public void changeWorkType(OwnerWorkType workType) {
+        this.workType = workType;
+    }
+
+    // 접수 항목 현재값을 문의 칸에도 반영 (현재값 조회·AI 입력용, 출처·이력은 InquiryField)
+    // 오류코드가 바뀌면 이전 오류코드 표 연결은 맞지 않으므로 끊음
+    public void applyField(InquiryFieldKey key, String value) {
+        switch (key) {
+            case MANUFACTURER -> this.manufacturer = value;
+            case MODEL -> this.model = value;
+            case BOILER_TYPE -> this.boilerType = value;
+            case SYMPTOM -> this.symptom = value;
+            case ERROR_CODE -> {
+                if (!Objects.equals(this.errorCode, value)) {
+                    this.boilerErrorCode = null;
+                }
+                this.errorCode = value;
+            }
+        }
     }
 }

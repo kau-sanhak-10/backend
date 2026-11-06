@@ -164,6 +164,16 @@ public class Owner extends BaseTimeEntity {
         return address != null && lat != null && lng != null;
     }
 
+    // 접수 링크가 살아 있는지 - 승인 전·거절·탈퇴 업체의 링크는 없는 것으로 봄
+    public boolean isIntakeLinkValid() {
+        return approvalStatus == ApprovalStatus.APPROVED && status != OwnerStatus.WITHDRAWN;
+    }
+
+    // 고객 상담을 받을 수 있는 상태 - 설정 중(READY)·이용 제한이면 새 상담도 진행 중 대화도 막음
+    public boolean isServingCustomers() {
+        return approvalStatus == ApprovalStatus.APPROVED && status == OwnerStatus.ACTIVE;
+    }
+
     // 접수 링크 발급·재발급 (O-04) - 토큰을 바꾸면 기존 링크는 폐기됨
     public void changeLinkToken(String linkToken) {
         this.linkToken = linkToken;
