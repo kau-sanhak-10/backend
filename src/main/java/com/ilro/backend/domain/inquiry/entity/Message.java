@@ -61,4 +61,9 @@ public class Message extends BaseCreatedEntity {
         this.content = content;
         this.clientMsgId = clientMsgId;
     }
+
+    // 서버에 저장되면 전달 완료 - 고객 메시지, 그리고 고객 화면이 가져가기로 받는 AI 답변
+    public void markSent() {
+        this.deliveryStatus = MessageDeliveryStatus.SENT;
+    }
 }

@@ -1,0 +1,6 @@
+# 테스트에서만 쓰임 (src/main의 application.yml 위에 덮어씀)
+# 고객 메시지마다 AI 분석이 따로 스레드에서 돌면 결과가 흔들리므로 꺼 둠
+# AI 분석 테스트는 AiAnalysisService를 직접 부르거나 이 값을 켜서 확인
+app:
+  ai:
+    enabled: false

@@ -28,7 +28,7 @@ public class WebConfig implements WebMvcConfigurer {
                 .addPathPatterns("/api/v1/owner/**");
         registry.addInterceptor(interceptor(EnumSet.of(AuthTokenType.ADMIN)))
                 .addPathPatterns("/api/v1/admin/**");
-        // 문의 토큰·고객 토큰의 세부 범위(그 문의만, 그 번호만)는 BE-18 서비스에서 확인
+        // 문의 토큰은 그 문의만(InquiryAccess), 고객 토큰의 세부 범위(그 번호만)는 BE-18 서비스에서 확인
         registry.addInterceptor(interceptor(EnumSet.of(AuthTokenType.INQUIRY, AuthTokenType.CUSTOMER)))
                 .addPathPatterns("/api/v1/customer/**");
         registry.addInterceptor(interceptor(EnumSet.allOf(AuthTokenType.class)))

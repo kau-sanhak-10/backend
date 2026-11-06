@@ -3,6 +3,7 @@ package com.ilro.backend.domain.auth.service;
 import com.ilro.backend.domain.admin.entity.Admin;
 import com.ilro.backend.domain.auth.entity.AuthToken;
 import com.ilro.backend.domain.auth.repository.AuthTokenRepository;
+import com.ilro.backend.domain.inquiry.entity.Inquiry;
 import com.ilro.backend.domain.owner.entity.Owner;
 import com.ilro.backend.global.auth.AuthPrincipal;
 import com.ilro.backend.global.exception.BusinessException;
@@ -30,6 +31,8 @@ public class AuthTokenService {
     // 로그인부터 최대 7일, 쓰는 동안 연장하지 않음
     public static final Duration OWNER_TOKEN_TTL = Duration.ofDays(7);
     public static final Duration ADMIN_TOKEN_TTL = Duration.ofHours(12);
+    // 상담 시작부터 24시간, 기기마다 따로 (명세 1.5)
+    public static final Duration INQUIRY_TOKEN_TTL = Duration.ofHours(24);
 
     // 마지막 사용 시각은 1분에 한 번만 기록 (요청마다 쓰지 않게)
     private static final Duration TOUCH_INTERVAL = Duration.ofMinutes(1);
@@ -53,6 +56,13 @@ public class AuthTokenService {
         String token = newToken("adm_");
         Instant expiresAt = clock.instant().plus(ADMIN_TOKEN_TTL);
         authTokenRepository.save(AuthToken.adminToken(hash(token), admin, expiresAt));
+        return new IssuedToken(token, expiresAt);
+    }
+
+    public IssuedToken issueInquiryToken(Inquiry inquiry) {
+        String token = newToken("inq_");
+        Instant expiresAt = clock.instant().plus(INQUIRY_TOKEN_TTL);
+        authTokenRepository.save(AuthToken.inquiryToken(hash(token), inquiry, expiresAt));
         return new IssuedToken(token, expiresAt);
     }
 

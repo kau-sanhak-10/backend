@@ -18,6 +18,8 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 import java.time.Instant;
+import java.util.EnumSet;
+import java.util.Set;
 
 // 사람 응대 요청 (직접 상담·전화 회신) - 진행 중 요청은 문의당 1건
 @Getter
@@ -25,6 +27,9 @@ import java.time.Instant;
 @Table(name = "handoff_request")
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class HandoffRequest extends BaseCreatedEntity {
+
+    // 진행 중 요청 - 문의당 1건 (uq_handoff_request_active)
+    public static final Set<HandoffStatus> ACTIVE = EnumSet.of(HandoffStatus.WAITING, HandoffStatus.IN_PROGRESS);
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -57,5 +62,18 @@ public class HandoffRequest extends BaseCreatedEntity {
         this.requestType = requestType;
         this.name = name;
         this.phone = phone;
+    }
+
+    // 대기 중 직접 상담을 전화 회신으로 바꿈 (명세 5.5) - 같은 요청을 이어 씀
+    public void switchToCallback(String name, String phone) {
+        this.requestType = HandoffRequestType.CALLBACK;
+        this.name = name;
+        this.phone = phone;
+    }
+
+    // 처리 상태 (WAITING → IN_PROGRESS → DONE) - 끝내면 끝낸 시각을 남김
+    public void changeStatus(HandoffStatus status, Instant now) {
+        this.status = status;
+        this.resolvedAt = status == HandoffStatus.DONE ? now : null;
     }
 }

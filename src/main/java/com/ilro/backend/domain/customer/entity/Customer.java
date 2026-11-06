@@ -43,4 +43,9 @@ public class Customer extends BaseTimeEntity {
         this.name = name;
         this.phone = phone;
     }
+
+    // 이름은 가장 최근 방문정보 입력으로 (C-06)
+    public void changeName(String name) {
+        this.name = name;
+    }
 }
