@@ -56,7 +56,7 @@ start() {
     --log-driver awslogs \
     --log-opt awslogs-region="$REGION" \
     --log-opt awslogs-group="/ilro/$ENV_NAME/app" \
-    --log-opt mode=non-blocking --loggit commit -am "feat: 컨테이너 로그를 CloudWatch Logs로 전송 (#35)"-opt max-buffer-size=4m \
+    --log-opt mode=non-blocking --log-opt max-buffer-size=4m \
     --env-file "$2" "$1" >/dev/null
 }
 
