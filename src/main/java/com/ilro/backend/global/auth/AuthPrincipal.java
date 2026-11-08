@@ -17,4 +17,15 @@ public record AuthPrincipal(Long tokenId, AuthTokenType type, Long ownerId, Long
                 token.getInquiry() == null ? null : token.getInquiry().getId(),
                 token.getCustomerPhone(), token.getScope());
     }
+
+    // 로그에 남길 주체 표시 (예: OWNER:12) - 전화번호·토큰 값은 넣지 않음
+    public String logActor() {
+        Long id = switch (type) {
+            case OWNER -> ownerId;
+            case ADMIN -> adminId;
+            case INQUIRY -> inquiryId;
+            case CUSTOMER -> tokenId;
+        };
+        return type + ":" + id;
+    }
 }
