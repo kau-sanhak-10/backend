@@ -28,7 +28,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-// 고객 사진 업로드·보기 (BE-06, C-05) - 실제 문의 토큰 + 가짜 저장소(LocalPhotoStorage)
+// 고객 사진 업로드·보기 + 사장님 사진 보기 (BE-06, C-05·B-13) - 실제 토큰 + 가짜 저장소(LocalPhotoStorage)
 @SpringBootTest
 class PhotoUploadFlowTest {
 
@@ -49,6 +49,7 @@ class PhotoUploadFlowTest {
     private MockMvc mockMvc;
     private TestAccounts accounts;
     private String link;
+    private String ownerToken;
 
     private record Session(long inquiryId, String token) {
 
@@ -65,7 +66,9 @@ class PhotoUploadFlowTest {
     void setUp() {
         mockMvc = MockMvcBuilders.webAppContextSetup(context).build();
         accounts = new TestAccounts(jdbc);
-        link = accounts.linkToken(accounts.approvedOwner(accounts.newPhone()));
+        long ownerId = accounts.approvedOwner(accounts.newPhone());
+        link = accounts.linkToken(ownerId);
+        ownerToken = accounts.ownerToken(ownerId);
     }
 
     @AfterEach
@@ -245,6 +248,34 @@ class PhotoUploadFlowTest {
                 .andExpect(jsonPath("$.code").value("PHOTO_NOT_FOUND"));
     }
 
+    @Test
+    @DisplayName("사장님 사진 보기 - 자기 업체 문의의 업로드를 마친 사진만, 고객 토큰·다른 업체는 막음")
+    void ownerViewUrl() throws Exception {
+        Session s = start(ALL_CONSENTS);
+        long done = uploaded(s);
+        long waiting = startUpload(s, "image/jpeg", SIZE);
+        Session otherInquiry = start(ALL_CONSENTS);
+        long otherPhoto = uploaded(otherInquiry);
+
+        ownerView(ownerToken, s, done).andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.photoId").value(done))
+                .andExpect(jsonPath("$.result.url", containsString("inquiries/" + s.inquiryId() + "/")))
+                .andExpect(jsonPath("$.result.expiresAt").isNotEmpty());
+        // 아직 올리는 중인 사진, 같은 업체의 다른 문의 사진 - 있다는 사실도 숨김
+        ownerView(ownerToken, s, waiting).andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("PHOTO_NOT_FOUND"));
+        ownerView(ownerToken, s, otherPhoto).andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("PHOTO_NOT_FOUND"));
+
+        // 다른 업체 사장님
+        String otherOwnerToken = accounts.ownerToken(accounts.approvedOwner(accounts.newPhone()));
+        ownerView(otherOwnerToken, s, done).andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("INQUIRY_NOT_FOUND"));
+        // 고객 문의 토큰으로 사장님 API, 토큰 없이
+        ownerView(s.token(), s, done).andExpect(status().isForbidden());
+        mockMvc.perform(get(ownerPhotoPath(s, done))).andExpect(status().isUnauthorized());
+    }
+
     private Session start(String consents) throws Exception {
         String body = mockMvc.perform(post("/api/v1/public/intake/" + link + "/inquiries")
                         .contentType(MediaType.APPLICATION_JSON).content(consents))
@@ -295,6 +326,15 @@ class PhotoUploadFlowTest {
     private void expireUpload(long photoId) {
         jdbc.update("UPDATE photo SET created_at = created_at - interval '10 minutes' WHERE id = ?", photoId);
     }
+
+    private ResultActions ownerView(String token, Session s, long photoId) throws Exception {
+        return mockMvc.perform(get(ownerPhotoPath(s, photoId)).header(HttpHeaders.AUTHORIZATION, "Bearer " + token));
+    }
+
+    private static String ownerPhotoPath(Session s, long photoId) {
+        return "/api/v1/owner/inquiries/" + s.inquiryId() + "/photos/" + photoId + "/url";
+    }
+
 
     private static String uploadBody(String contentType, long sizeBytes) {
         return "{\"contentType\":\"" + contentType + "\",\"sizeBytes\":" + sizeBytes + "}";
