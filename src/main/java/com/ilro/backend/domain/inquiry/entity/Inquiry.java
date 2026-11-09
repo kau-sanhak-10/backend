@@ -206,6 +206,9 @@ public class Inquiry extends BaseTimeEntity {
         switch (key) {
             case MANUFACTURER -> this.manufacturer = value;
             case MODEL -> this.model = value;
+            case CONTROLLER_MODEL -> {
+                // 조절기 모델은 inquiry_field에만 보존한다. 본체 모델·매뉴얼 조회 키와는 별개다.
+            }
             case BOILER_TYPE -> this.boilerType = value;
             case SYMPTOM -> this.symptom = value;
             case ERROR_CODE -> {

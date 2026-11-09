@@ -237,7 +237,10 @@ class AiAnalysisFlowTest {
 
         long newPhoto = uploadedPhoto(session);
         sendWithPhoto(session, "", newPhoto);
-        ai.then(reply(answer("ASK_MORE_INFO", "MISSING_FIELD").targets("symptom").analyzed(pending, newPhoto)));
+        ai.then(reply(answer("ASK_MORE_INFO", "MISSING_FIELD").targets("symptom")
+                .fact(new Fact("controller_model", "CTRL-1", "PHOTO", "CONFIRMED", null,
+                        new Evidence(null, newPhoto)))
+                .analyzed(pending, newPhoto)));
         analysisService.analyze(session.inquiryId());
 
         AnalyzeRequest next = ai.requests().getLast();
@@ -253,6 +256,9 @@ class AiAnalysisFlowTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.result.fields[1].value").value("NCB-500"))
                 .andExpect(jsonPath("$.result.fields[1].source").value("PHOTO"))
+                .andExpect(jsonPath("$.result.fields[5].fieldKey").value("controller_model"))
+                .andExpect(jsonPath("$.result.fields[5].value").value("CTRL-1"))
+                .andExpect(jsonPath("$.result.fields[5].photoId").value(newPhoto))
                 .andExpect(jsonPath("$.result.photos[0].photoId").value(completed));
     }
 
