@@ -186,13 +186,14 @@ public class AiAnalysisStore {
         return State.DONE;
     }
 
-    // 실패한 호출 기록 - 허위 판단값 없이 (모델명·할 일 비움, 명세 6.4)
+    // 실패·중단된 호출 기록 - 허위 판단값 없이 (모델명·할 일 비움, 명세 6.4)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public State recordFailure(Snapshot snapshot, AiCallResult call) {
         Inquiry inquiry = inquiryRepository.findById(snapshot.inquiryId()).orElseThrow();
         AiDecisionStatus status = switch (call.outcome()) {
             case TIMEOUT -> AiDecisionStatus.TIMEOUT;
             case INVALID_OUTPUT -> AiDecisionStatus.INVALID_OUTPUT;
+            case SUPERSEDED -> AiDecisionStatus.STALE;
             default -> AiDecisionStatus.FAILED;
         };
         decisionRepository.save(AiDecision.builder()

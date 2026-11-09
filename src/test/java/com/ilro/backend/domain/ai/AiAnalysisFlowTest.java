@@ -1,10 +1,13 @@
 package com.ilro.backend.domain.ai;
 
 import com.ilro.backend.domain.ai.service.AiAnalysisService;
+import com.ilro.backend.domain.ai.service.AiAnalysisQueue;
+import com.ilro.backend.domain.ai.service.AiAnalysisRequested;
 import com.ilro.backend.domain.ai.service.AiAnalysisStore;
 import com.ilro.backend.domain.inquiry.entity.HandlerMode;
 import com.ilro.backend.domain.inquiry.entity.InquiryFieldSource;
 import com.ilro.backend.domain.inquiry.entity.MessageSender;
+import com.ilro.backend.domain.inquiry.repository.InquiryRepository;
 import com.ilro.backend.domain.owner.entity.WorkCategory;
 import com.ilro.backend.infra.ai.AiCallResult;
 import com.ilro.backend.infra.ai.AiCallResult.Outcome;
@@ -12,10 +15,12 @@ import com.ilro.backend.infra.ai.AnalyzeRequest;
 import com.ilro.backend.infra.ai.AnalyzeResult;
 import com.ilro.backend.infra.ai.AnalyzeResult.Evidence;
 import com.ilro.backend.infra.ai.AnalyzeResult.Fact;
+import com.ilro.backend.infra.ai.HttpAiAnalyzeClient;
 import com.ilro.backend.support.ScriptedAiClient;
 import com.ilro.backend.support.TestAccounts;
 import com.ilro.backend.support.TestAiConfig;
 import com.jayway.jsonpath.JsonPath;
+import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -36,12 +41,18 @@ import tools.jackson.databind.json.JsonMapper;
 import com.ilro.backend.infra.storage.LocalPhotoStorage;
 
 import java.math.BigDecimal;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -75,6 +86,8 @@ class AiAnalysisFlowTest {
     private AiAnalysisService analysisService;
     @Autowired
     private AiAnalysisStore store;
+    @Autowired
+    private InquiryRepository inquiryRepository;
     @Autowired
     private ScriptedAiClient ai;
     @Autowired
@@ -351,6 +364,69 @@ class AiAnalysisFlowTest {
                 session.inquiryId())).containsExactly("누수·소음");
         assertThat(aiMessages(session)).isEqualTo(1);
         assertThat(inquiry(session)).containsEntry("status", "COLLECTING");
+    }
+
+    @Test
+    @DisplayName("사진 응답이 늦어도 같은 문의의 새 안전 신고를 먼저 저장하고 이전 결과는 폐기")
+    void newSafetyTextDoesNotWaitForPhotoResponse() throws Exception {
+        Session session = startInquiry();
+        long photo = uploadedPhoto(session);
+        sendWithPhoto(session, "", photo);
+        var photoCallStarted = new CountDownLatch(1);
+        var releasePhotoCall = new CountDownLatch(1);
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        try (var serverThreads = Executors.newVirtualThreadPerTaskExecutor();
+             var queueThread = Executors.newSingleThreadExecutor()) {
+            server.setExecutor(serverThreads);
+            server.createContext("/internal/v1/inquiries/analyze", exchange -> {
+                try (exchange) {
+                    var request = jsonMapper.readValue(exchange.getRequestBody(), AnalyzeRequest.class);
+                    boolean safety = request.messages().stream().anyMatch(msg -> msg.content().contains("가스 냄새"));
+                    Answer response;
+                    if (safety) {
+                        response = answer("ESCALATE_TO_OWNER", "SAFETY").safety().byRule();
+                    } else {
+                        photoCallStarted.countDown();
+                        releasePhotoCall.await(10, TimeUnit.SECONDS);
+                        response = answer("ASK_MORE_INFO", "MISSING_FIELD").analyzed(photo);
+                    }
+                    byte[] body = ok(response.build(request)).rawBody().getBytes(StandardCharsets.UTF_8);
+                    exchange.sendResponseHeaders(200, body.length);
+                    exchange.getResponseBody().write(body);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+            server.start();
+            var client = new HttpAiAnalyzeClient(jsonMapper, "http://127.0.0.1:" + server.getAddress().getPort(),
+                    "test-key", Duration.ofSeconds(2));
+            var service = new AiAnalysisService(store, client, Clock.systemUTC(), Duration.ofSeconds(8),
+                    Duration.ofSeconds(12));
+            var queue = new AiAnalysisQueue(service, inquiryRepository, queueThread::execute, Clock.systemUTC(), true);
+            try {
+                queue.request(session.inquiryId());
+                assertThat(photoCallStarted.await(3, TimeUnit.SECONDS)).isTrue();
+                long report = send(session, "가스 냄새가 나요.");
+                queue.on(new AiAnalysisRequested(session.inquiryId(), report));
+
+                long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(4);
+                while (!Boolean.TRUE.equals(inquiry(session).get("safety_flag")) && System.nanoTime() < until) {
+                    Thread.sleep(25);
+                }
+                assertThat(inquiry(session)).containsEntry("status", "OWNER_CHECK").containsEntry("safety_flag", true);
+                assertThat(releasePhotoCall.getCount()).isEqualTo(1);
+                assertThat(decisionStatuses(session)).containsExactly("STALE", "SUCCESS");
+                assertThat(jdbc.queryForObject("SELECT error_message FROM ai_decision WHERE inquiry_id = ? AND status = 'STALE'",
+                        String.class, session.inquiryId())).isEqualTo("INPUT_SUPERSEDED");
+                assertThat(aiMessages(session)).isEqualTo(1);
+                assertThat(notifications(session)).isEqualTo(1);
+                assertThat(jdbc.queryForList("SELECT id FROM message WHERE inquiry_id = ? AND sender = 'CUSTOMER' ORDER BY id",
+                        Long.class, session.inquiryId())).contains(report).hasSize(2);
+            } finally {
+                releasePhotoCall.countDown();
+                server.stop(0);
+            }
+        }
     }
 
     @Test

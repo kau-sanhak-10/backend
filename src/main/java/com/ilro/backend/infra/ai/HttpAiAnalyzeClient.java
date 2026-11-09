@@ -22,6 +22,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.BooleanSupplier;
 
 // 실제 AI 서버(FastAPI) 호출 - 헤더 X-Internal-Key로 서로 확인 (명세 1.1·6.2)
 // 요청·응답 본문과 내부 키는 로그에 남기지 않음
@@ -31,6 +32,7 @@ import java.util.concurrent.TimeoutException;
 public class HttpAiAnalyzeClient implements AiAnalyzeClient {
 
     static final String ANALYZE_PATH = "/internal/v1/inquiries/analyze";
+    private static final long SUPERSEDED_CHECK_NANOS = TimeUnit.MILLISECONDS.toNanos(100);
 
     private final HttpClient httpClient;
     private final JsonMapper jsonMapper;
@@ -55,7 +57,15 @@ public class HttpAiAnalyzeClient implements AiAnalyzeClient {
     // 헤더 뒤 본문이 멈춰도(프록시·네트워크 끊김) 작업 스레드가 묶이지 않게 전체를 이 시간만 기다리고 취소함
     @Override
     public AiCallResult analyze(AnalyzeRequest request, Duration timeout) {
+        return analyze(request, timeout, null);
+    }
+
+    @Override
+    public AiCallResult analyze(AnalyzeRequest request, Duration timeout, BooleanSupplier superseded) {
         long started = System.nanoTime();
+        if (superseded != null && superseded.getAsBoolean()) {
+            return superseded(started);
+        }
         HttpRequest httpRequest = HttpRequest.newBuilder(analyzeUri)
                 .timeout(timeout)
                 .header("Content-Type", "application/json")
@@ -65,12 +75,25 @@ public class HttpAiAnalyzeClient implements AiAnalyzeClient {
                 .build();
         CompletableFuture<HttpResponse<String>> pending =
                 httpClient.sendAsync(httpRequest, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-        HttpResponse<String> response;
         try {
-            response = pending.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
-        } catch (TimeoutException e) {
-            pending.cancel(true);
-            return AiCallResult.failure(Outcome.TIMEOUT, true, null, "READ_TIMEOUT", elapsedMs(started));
+            while (true) {
+                if (superseded != null && superseded.getAsBoolean()) {
+                    pending.cancel(true);
+                    return superseded(started);
+                }
+                long left = timeout.toNanos() - (System.nanoTime() - started);
+                if (left <= 0) {
+                    pending.cancel(true);
+                    return AiCallResult.failure(Outcome.TIMEOUT, true, null, "READ_TIMEOUT", elapsedMs(started));
+                }
+                try {
+                    long wait = superseded == null ? left : Math.min(left, SUPERSEDED_CHECK_NANOS);
+                    HttpResponse<String> response = pending.get(wait, TimeUnit.NANOSECONDS);
+                    return toResult(response.statusCode(), response.body(), elapsedMs(started));
+                } catch (TimeoutException ignored) {
+                    // 사진 대기 중에만 새 텍스트가 들어왔는지 짧은 간격으로 확인한다.
+                }
+            }
         } catch (ExecutionException e) {
             return failure(request, e.getCause(), started);
         } catch (InterruptedException e) {
@@ -78,7 +101,10 @@ public class HttpAiAnalyzeClient implements AiAnalyzeClient {
             Thread.currentThread().interrupt();
             return AiCallResult.failure(Outcome.FAILED, false, null, "INTERRUPTED", elapsedMs(started));
         }
-        return toResult(response.statusCode(), response.body(), elapsedMs(started));
+    }
+
+    private static AiCallResult superseded(long started) {
+        return AiCallResult.failure(Outcome.SUPERSEDED, false, null, "INPUT_SUPERSEDED", elapsedMs(started));
     }
 
     private static AiCallResult failure(AnalyzeRequest request, Throwable cause, long started) {

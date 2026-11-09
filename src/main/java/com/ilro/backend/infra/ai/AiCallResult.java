@@ -11,6 +11,7 @@ public record AiCallResult(Outcome outcome, boolean retryable, AnalyzeResult res
         SUCCESS,
         TIMEOUT,
         INVALID_OUTPUT,
+        SUPERSEDED,
         FAILED
     }
 

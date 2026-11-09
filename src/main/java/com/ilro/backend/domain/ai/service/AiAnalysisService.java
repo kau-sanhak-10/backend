@@ -12,6 +12,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.function.LongSupplier;
 
 // 문의 분석 작업 (명세 6장, BE-05·BE-08) - 최신 입력으로 AI 서버를 부르고 결과를 적용
 // 같은 입력 버전은 최초 포함 최대 2회, 시도당 30초, 전체 60초 안에서만 다시 부름 (10/26 결정, 재시도는 여기 한 곳에서만)
@@ -43,28 +44,40 @@ public class AiAnalysisService {
     }
 
     public void analyze(Long inquiryId) {
+        analyze(inquiryId, null);
+    }
+
+    public void analyze(Long inquiryId, LongSupplier latestTextMessageId) {
         for (int round = 0; round < MAX_ROUNDS; round++) {
             Optional<Snapshot> snapshot = store.prepare(inquiryId);
-            if (snapshot.isEmpty() || callUntilSettled(snapshot.get()) != State.NEW_INPUT) {
+            if (snapshot.isEmpty() || callUntilSettled(snapshot.get(), latestTextMessageId) != State.NEW_INPUT) {
                 return;
             }
         }
         log.warn("AI 분석 중 새 입력이 계속 들어와 다음 요청에 넘김 inquiryId={}", inquiryId);
     }
 
-    private State callUntilSettled(Snapshot snapshot) {
+    private State callUntilSettled(Snapshot snapshot, LongSupplier latestTextMessageId) {
         Instant deadline = clock.instant().plus(totalBudget);
+        var request = snapshot.request();
+        boolean waitingForPhoto = latestTextMessageId != null && request.photos().stream()
+                .anyMatch(photo -> !request.processedPhotoIds().contains(photo.photoId()));
         for (int attempt = snapshot.failedAttempts(); attempt < MAX_ATTEMPTS; attempt++) {
             Duration left = Duration.between(clock.instant(), deadline);
             if (left.compareTo(MIN_ATTEMPT) < 0) {
                 break;
             }
-            AiCallResult call = checked(snapshot, client.analyze(snapshot.request(),
-                    left.compareTo(attemptTimeout) < 0 ? left : attemptTimeout));
+            Duration timeout = left.compareTo(attemptTimeout) < 0 ? left : attemptTimeout;
+            AiCallResult call = checked(snapshot, waitingForPhoto
+                    ? client.analyze(request, timeout, () -> latestTextMessageId.getAsLong() > snapshot.lastCustomerMessageId())
+                    : client.analyze(request, timeout));
             log.info("AI 분석 inquiryId={} inputVersion={} attempt={} outcome={} code={} latencyMs={}",
                     snapshot.inquiryId(), snapshot.inputVersion(), attempt + 1, call.outcome(), call.errorCode(),
                     call.latencyMs());
             State state = call.isSuccess() ? store.apply(snapshot, call) : store.recordFailure(snapshot, call);
+            if (call.outcome() == AiCallResult.Outcome.SUPERSEDED) {
+                return state == State.CURRENT ? State.NEW_INPUT : state;
+            }
             if (state != State.CURRENT) {
                 return state;
             }
