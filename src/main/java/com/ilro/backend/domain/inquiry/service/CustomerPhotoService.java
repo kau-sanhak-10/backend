@@ -74,9 +74,7 @@ public class CustomerPhotoService {
             throw new BusinessException(PhotoErrorCode.PHOTO_TOO_LARGE);
         }
         // 업로드 주소가 만료된 채 남은 UPLOADING은 버려진 업로드라 세지 않음 (올리다 그만둬도 자리가 풀림)
-        long active = photoRepository.countActive(inquiryId, clock.instant().minus(uploadTtl),
-                PhotoUploadStatus.DONE, PhotoUploadStatus.UPLOADING);
-        if (active >= MAX_PER_INQUIRY) {
+        if (isFull(inquiryId)) {
             throw new BusinessException(PhotoErrorCode.PHOTO_LIMIT_EXCEEDED);
         }
 
@@ -94,16 +92,20 @@ public class CustomerPhotoService {
     // 이미 끝난 사진은 그 결과를 그대로 돌려줌 (같은 요청을 다시 보내도 안전)
     @Transactional
     public PhotoStatusResponse complete(AuthPrincipal principal, Long inquiryId, Long photoId) {
-        inquiryAccess.find(principal, inquiryId);
+        // 업로드 시작과 같은 잠금 - 만료된 사진을 완료할 때 장수를 다시 세는 동안 다른 업로드가 끼지 않게
+        inquiryAccess.lock(principal, inquiryId);
         Photo photo = findPhoto(inquiryId, photoId);
         if (photo.getUploadStatus() == PhotoUploadStatus.UPLOADING) {
             Optional<StoredFile> file = storage.find(photo.getS3KeyOriginal());
             if (file.isPresent()) {
-                if (file.get().sizeBytes() == photo.getSizeBytes()
-                        && photo.getMimeType().equalsIgnoreCase(file.get().contentType())) {
-                    photo.markDone();
-                } else {
+                if (file.get().sizeBytes() != photo.getSizeBytes()
+                        || !photo.getMimeType().equalsIgnoreCase(file.get().contentType())) {
                     photo.markFailed();
+                } else if (isUploadExpired(photo) && isFull(inquiryId)) {
+                    // 만료돼서 자리를 내준 사진 - 그 사이 다른 사진이 자리를 채웠으면 받지 않음
+                    photo.markFailed();
+                } else {
+                    photo.markDone();
                 }
             } else if (isUploadExpired(photo)) {
                 // 업로드 주소가 만료됐는데 파일이 없음 - 더 기다려도 안 올라오므로 처음부터 다시
@@ -144,5 +146,12 @@ public class CustomerPhotoService {
     // 업로드 시작 후 업로드 주소 유효시간이 지났는지
     private boolean isUploadExpired(Photo photo) {
         return !photo.getCreatedAt().plus(uploadTtl).isAfter(clock.instant());
+    }
+
+    // 이 문의 사진이 꽉 찼는지 - DONE + 아직 유효한 UPLOADING (만료된 UPLOADING은 자리 없음)
+    private boolean isFull(Long inquiryId) {
+        long active = photoRepository.countActive(inquiryId, clock.instant().minus(uploadTtl),
+                PhotoUploadStatus.DONE, PhotoUploadStatus.UPLOADING);
+        return active >= MAX_PER_INQUIRY;
     }
 }

@@ -178,6 +178,34 @@ class PhotoUploadFlowTest {
     }
 
     @Test
+    @DisplayName("만료 후 늦게 완료한 사진 - 그 사이 자리가 찼으면 FAILED, 자리가 있으면 DONE")
+    void lateCompleteAfterExpiry() throws Exception {
+        Session s = start(ALL_CONSENTS);
+        for (int i = 0; i < 8; i++) {
+            uploaded(s);
+        }
+        // 파일은 올렸는데 완료 확인을 안 부르고 5분이 지남
+        long late = startUpload(s, "image/jpeg", SIZE);
+        storage.putForTest(key(late), SIZE, "image/jpeg");
+        expireUpload(late);
+
+        // 자리가 남아 있으면(DONE 8장) 늦게 와도 받아 줌
+        complete(s, late).andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.uploadStatus").value("DONE"));
+
+        // 다시: DONE 9장 상태에서 만료된 사진 하나
+        long abandoned = startUpload(s, "image/jpeg", SIZE);
+        storage.putForTest(key(abandoned), SIZE, "image/jpeg");
+        expireUpload(abandoned);
+        // 풀린 자리를 새 사진이 채움 → DONE 10장
+        uploaded(s);
+
+        // 늦게 온 완료 확인은 11장째가 되므로 거절
+        complete(s, abandoned).andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.uploadStatus").value("FAILED"));
+    }
+
+    @Test
     @DisplayName("다른 문의 사진은 완료·보기 모두 404 - 있다는 사실도 숨김, 토큰 없으면 401")
     void otherInquiryPhoto() throws Exception {
         Session mine = start(ALL_CONSENTS);
