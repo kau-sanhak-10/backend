@@ -23,6 +23,7 @@ import org.springframework.web.context.WebApplicationContext;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.containsString;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -249,7 +250,7 @@ class PhotoUploadFlowTest {
     }
 
     @Test
-    @DisplayName("사장님 사진 보기 - 자기 업체 문의의 업로드를 마친 사진만, 고객 토큰·다른 업체는 막음")
+    @DisplayName("사장님 사진 보기 - 자기 업체 문의에서 고객이 보낸 사진만, 고객 토큰·다른 업체는 막음")
     void ownerViewUrl() throws Exception {
         Session s = start(ALL_CONSENTS);
         long done = uploaded(s);
@@ -257,6 +258,11 @@ class PhotoUploadFlowTest {
         Session otherInquiry = start(ALL_CONSENTS);
         long otherPhoto = uploaded(otherInquiry);
 
+        ownerView(ownerToken, s, done).andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("PHOTO_NOT_FOUND"));
+        ownerDetail(s).andExpect(jsonPath("$.result.photos").isEmpty());
+        sendPhoto(s, done).andExpect(status().isCreated());
+        ownerDetail(s).andExpect(jsonPath("$.result.photos[0].photoId").value(done));
         ownerView(ownerToken, s, done).andExpect(status().isOk())
                 .andExpect(jsonPath("$.result.photoId").value(done))
                 .andExpect(jsonPath("$.result.url", containsString("inquiries/" + s.inquiryId() + "/")))
@@ -274,6 +280,45 @@ class PhotoUploadFlowTest {
         // 고객 문의 토큰으로 사장님 API, 토큰 없이
         ownerView(s.token(), s, done).andExpect(status().isForbidden());
         mockMvc.perform(get(ownerPhotoPath(s, done))).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("미전송 사진 취소는 재시도 가능하고 자리를 돌려주며 이미 전송한 사진을 지우지 않음")
+    void cancelUnsentPhoto() throws Exception {
+        Session s = start(ALL_CONSENTS);
+        long canceled = uploaded(s);
+        long sent = uploaded(s);
+        sendPhoto(s, sent).andExpect(status().isCreated());
+        for (int i = 0; i < 8; i++) uploaded(s);
+        upload(s, "image/jpeg", SIZE).andExpect(status().isConflict());
+
+        Session other = start(ALL_CONSENTS);
+        cancel(other, canceled).andExpect(status().isNotFound());
+        cancel(s, sent).andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PHOTO_ALREADY_ATTACHED"));
+        cancel(s, canceled).andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.uploadStatus").value("FAILED"));
+        cancel(s, canceled).andExpect(status().isOk());
+        complete(s, canceled).andExpect(jsonPath("$.result.uploadStatus").value("FAILED"));
+        view(s, canceled).andExpect(status().isNotFound());
+        sendPhoto(s, canceled).andExpect(status().is4xxClientError());
+        upload(s, "image/jpeg", SIZE).andExpect(status().isCreated());
+        ownerView(ownerToken, s, sent).andExpect(status().isOk());
+    }
+
+    private ResultActions cancel(Session s, long photoId) throws Exception {
+        return mockMvc.perform(delete(s.path("/" + photoId)).header(HttpHeaders.AUTHORIZATION, s.bearer()));
+    }
+
+    private ResultActions sendPhoto(Session s, long photoId) throws Exception {
+        return mockMvc.perform(post("/api/v1/customer/inquiries/" + s.inquiryId() + "/messages")
+                .header(HttpHeaders.AUTHORIZATION, s.bearer()).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"clientMsgId\":\"" + UUID.randomUUID() + "\",\"photoIds\":[" + photoId + "]}"));
+    }
+
+    private ResultActions ownerDetail(Session s) throws Exception {
+        return mockMvc.perform(get("/api/v1/owner/inquiries/" + s.inquiryId())
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)).andExpect(status().isOk());
     }
 
     private Session start(String consents) throws Exception {

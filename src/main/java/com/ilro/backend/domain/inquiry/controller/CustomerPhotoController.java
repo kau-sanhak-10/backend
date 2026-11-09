@@ -15,6 +15,7 @@ import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -45,6 +46,12 @@ public class CustomerPhotoController {
     public ApiResponse<PhotoStatusResponse> complete(AuthPrincipal principal, @PathVariable Long inquiryId,
                                                      @PathVariable Long photoId) {
         return ApiResponse.onSuccess(photoService.complete(principal, inquiryId, photoId));
+    }
+
+    @DeleteMapping("/{photoId}")
+    public ApiResponse<PhotoStatusResponse> cancel(AuthPrincipal principal, @PathVariable Long inquiryId,
+                                                   @PathVariable Long photoId) {
+        return ApiResponse.onSuccess(photoService.cancel(principal, inquiryId, photoId));
     }
 
     // 사진 보기 주소 - ?ids=1,2 (한 번에 10장까지)

@@ -17,7 +17,8 @@ public enum PhotoErrorCode implements ErrorCode {
     // 없거나 다른 문의의 사진 - 있다는 사실도 숨김
     PHOTO_NOT_FOUND(HttpStatus.NOT_FOUND, "PHOTO_NOT_FOUND", "사진을 찾을 수 없어요"),
     // complete를 업로드보다 먼저 부름 - 상태는 그대로 두므로 업로드 후 다시 부르면 됨
-    PHOTO_NOT_UPLOADED(HttpStatus.CONFLICT, "PHOTO_NOT_UPLOADED", "아직 사진이 올라가지 않았어요");
+    PHOTO_NOT_UPLOADED(HttpStatus.CONFLICT, "PHOTO_NOT_UPLOADED", "아직 사진이 올라가지 않았어요"),
+    PHOTO_ALREADY_ATTACHED(HttpStatus.CONFLICT, "PHOTO_ALREADY_ATTACHED", "이미 보낸 사진은 취소할 수 없어요");
 
     private final HttpStatus status;
     private final String code;

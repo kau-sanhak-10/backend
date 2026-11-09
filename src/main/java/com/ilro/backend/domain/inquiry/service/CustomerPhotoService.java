@@ -12,6 +12,7 @@ import com.ilro.backend.domain.inquiry.entity.PhotoUploadStatus;
 import com.ilro.backend.domain.inquiry.exception.PhotoErrorCode;
 import com.ilro.backend.domain.inquiry.repository.PhotoRepository;
 import com.ilro.backend.global.auth.AuthPrincipal;
+import com.ilro.backend.global.common.util.AccessLog;
 import com.ilro.backend.global.common.util.KstTime;
 import com.ilro.backend.global.exception.BusinessException;
 import com.ilro.backend.infra.storage.PhotoStorage;
@@ -114,6 +115,22 @@ public class CustomerPhotoService {
                 // 아직 올리는 중일 수 있음 - 상태는 그대로, 업로드가 끝나면 다시 부르면 됨
                 throw new BusinessException(PhotoErrorCode.PHOTO_NOT_UPLOADED);
             }
+        }
+        return new PhotoStatusResponse(photo.getId(), photo.getUploadStatus());
+    }
+
+    @Transactional
+    public PhotoStatusResponse cancel(AuthPrincipal principal, Long inquiryId, Long photoId) {
+        // 메시지 첨부·업로드 완료와 같은 문의 잠금: 먼저 보낸 사진은 취소할 수 없음
+        inquiryAccess.lock(principal, inquiryId);
+        Photo photo = findPhoto(inquiryId, photoId);
+        if (photo.getMessage() != null) {
+            throw new BusinessException(PhotoErrorCode.PHOTO_ALREADY_ATTACHED);
+        }
+        // ponytail: 즉시 조회·첨부·한도에서 제외. 비공개 저장소의 미사용 객체 물리 정리는 별도 수명주기 작업.
+        if (photo.getUploadStatus() != PhotoUploadStatus.FAILED) {
+            photo.markFailed();
+            AccessLog.record(principal, "UPDATE", "photo", photoId);
         }
         return new PhotoStatusResponse(photo.getId(), photo.getUploadStatus());
     }

@@ -197,7 +197,8 @@ public class OwnerInquiryService {
                 .toList();
         return OwnerInquiryDetailResponse.of(inquiry, fieldRepository.findAllOf(inquiryId),
                 aiSummary(inquiry, decision),
-                photoRepository.findByInquiryIdAndUploadStatusOrderByIdAsc(inquiryId, PhotoUploadStatus.DONE),
+                photoRepository.findByInquiryIdAndUploadStatusAndMessageIsNotNullOrderByIdAsc(
+                        inquiryId, PhotoUploadStatus.DONE),
                 handoffRepository.findByInquiryIdOrderByIdDesc(inquiryId),
                 reservationRepository.findByInquiryIdAndStatusNot(inquiryId, ReservationStatus.CANCELED).orElse(null),
                 consents, !fieldService.findRequiredWaitingOwner(List.of(inquiryId)).isEmpty());
