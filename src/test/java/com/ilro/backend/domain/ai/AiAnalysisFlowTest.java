@@ -33,6 +33,7 @@ import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 import tools.jackson.databind.json.JsonMapper;
+import com.ilro.backend.infra.storage.LocalPhotoStorage;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -74,6 +75,8 @@ class AiAnalysisFlowTest {
     private AiAnalysisStore store;
     @Autowired
     private ScriptedAiClient ai;
+    @Autowired
+    private LocalPhotoStorage photoStorage;
 
     private MockMvc mockMvc;
     private TestAccounts accounts;
@@ -187,6 +190,31 @@ class AiAnalysisFlowTest {
         analysisService.analyze(session.inquiryId());
         assertThat(ai.requests()).hasSize(1);
     }
+
+    @Test
+    @DisplayName("사진 - 이번 메시지에 붙은 업로드 완료 사진만 원본 임시 주소로 보내고, 요청 기록에는 주소를 남기지 않음")
+    void photosInRequest() throws Exception {
+        Session session = startInquiry();
+        long attached = uploadedPhoto(session);
+        uploadedPhoto(session); // 올리기만 하고 메시지에 안 붙인 사진은 보내지 않음
+        long messageId = sendWithPhoto(session, "보일러 화면 사진이에요", attached);
+        ai.then(reply(answer("COMPLETE", "DONE")));
+
+        analysisService.analyze(session.inquiryId());
+
+        assertThat(ai.requests().getFirst().photos()).singleElement().satisfies(photo -> {
+            assertThat(photo.photoId()).isEqualTo(attached);
+            assertThat(photo.messageId()).isEqualTo(messageId);
+            assertThat(photo.imageUrl()).contains("inquiries/" + session.inquiryId() + "/");
+        });
+        // DB 기록에는 사진·메시지 번호만, 주소는 비움
+        String snapshot = jdbc.queryForObject("SELECT input_snapshot::text FROM ai_decision WHERE inquiry_id = ?",
+                String.class, session.inquiryId());
+        assertThat(((Number) JsonPath.read(snapshot, "$.photos[0].photoId")).longValue()).isEqualTo(attached);
+        assertThat((Object) JsonPath.read(snapshot, "$.photos[0].imageUrl")).isNull();
+        assertThat(snapshot).doesNotContain("local-photo-storage");
+    }
+
 
     @Test
     @DisplayName("이름·전화번호·주소는 AI 서버에 보내지 않음 - 요청 기록(input_snapshot)에도 없음")
@@ -759,6 +787,29 @@ class AiAnalysisFlowTest {
             throw new IllegalStateException(e);
         }
     }
+
+    // 업로드를 마친(DONE) 사진 하나 - 가짜 저장소에 파일이 올라간 것으로 만듦
+    private long uploadedPhoto(Session session) throws Exception {
+        String body = postAs(session.token(), session.path("/photos"),
+                "{\"contentType\":\"image/jpeg\",\"sizeBytes\":1000}")
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        long photoId = ((Number) JsonPath.read(body, "$.result.photoId")).longValue();
+        String key = jdbc.queryForObject("SELECT s3_key_original FROM photo WHERE id = ?", String.class, photoId);
+        photoStorage.putForTest(key, 1000, "image/jpeg");
+        postAs(session.token(), session.path("/photos/" + photoId + "/complete"), "")
+                .andExpect(jsonPath("$.result.uploadStatus").value("DONE"));
+        return photoId;
+    }
+
+    private long sendWithPhoto(Session session, String content, long photoId) throws Exception {
+        String body = postAs(session.token(), session.path("/messages"), "{\"clientMsgId\":\"" + UUID.randomUUID()
+                + "\",\"content\":\"" + content + "\",\"photoIds\":[" + photoId + "]}")
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        return ((Number) JsonPath.read(body, "$.result.messageId")).longValue();
+    }
+
 
     private Map<String, Object> inquiry(Session session) {
         return jdbc.queryForMap("SELECT status, version, ai_input_seq, safety_flag, symptom, model, work_type_id "
