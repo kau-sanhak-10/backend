@@ -36,6 +36,9 @@ dependencies {
     implementation 'org.postgresql:postgresql'
     implementation 'org.springframework.boot:spring-boot-starter-flyway'
     implementation 'org.flywaydb:flyway-database-postgresql'
+    // S3 사진 업로드·보기 주소 발급 (BE-06) - 버전은 BOM 한 곳에서
+    implementation platform('software.amazon.awssdk:bom:2.57.0')
+    implementation 'software.amazon.awssdk:s3'
 }
 
 tasks.named('test') {

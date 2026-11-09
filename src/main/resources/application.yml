@@ -50,3 +50,11 @@ app:
     total-budget: 60s
     # 답이 없는 고객 메시지를 다시 확인하는 간격 (서버 재시작·대기열 가득 참 대비)
     sweep-interval: PT1M
+  photo:
+    # 사진 버킷 - 서버(dev·prod)는 Parameter Store PHOTO_BUCKET, 로컬·테스트는 가짜 저장소라 비워도 됨
+    bucket: ${PHOTO_BUCKET:}
+    region: ap-northeast-2
+    # S3 업로드 주소 유효시간 - 이 안에 올리기 시작해야 함
+    upload-ttl: 5m
+    # 사진 보기 주소 유효시간 - AI 호출 전체 대기(60초)보다 넉넉하게
+    view-ttl: 5m

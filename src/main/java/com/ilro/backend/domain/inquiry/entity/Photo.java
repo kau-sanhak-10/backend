@@ -72,4 +72,14 @@ public class Photo extends BaseCreatedEntity {
     public void attachTo(Message message) {
         this.message = message;
     }
+
+    // S3에 신고한 크기·형식 그대로 올라옴 - 이제 메시지에 붙일 수 있음
+    public void markDone() {
+        this.uploadStatus = PhotoUploadStatus.DONE;
+    }
+
+    // 올라온 파일이 신고와 다름 - 이 사진은 버리고 업로드를 처음부터 다시
+    public void markFailed() {
+        this.uploadStatus = PhotoUploadStatus.FAILED;
+    }
 }
