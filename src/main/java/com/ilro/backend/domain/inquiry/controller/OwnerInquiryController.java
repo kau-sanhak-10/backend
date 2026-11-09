@@ -5,10 +5,12 @@ import com.ilro.backend.domain.inquiry.dto.OwnerHomeResponse;
 import com.ilro.backend.domain.inquiry.dto.OwnerInquiryDetailResponse;
 import com.ilro.backend.domain.inquiry.dto.OwnerInquiryListResponse;
 import com.ilro.backend.domain.inquiry.dto.OwnerUpdateInquiryRequest;
+import com.ilro.backend.domain.inquiry.dto.PhotoUrlsResponse.PhotoUrl;
 import com.ilro.backend.domain.inquiry.entity.HandlerMode;
 import com.ilro.backend.domain.inquiry.entity.InquiryStatus;
 import com.ilro.backend.domain.inquiry.service.InquiryMessageService;
 import com.ilro.backend.domain.inquiry.service.OwnerInquiryService;
+import com.ilro.backend.domain.inquiry.service.OwnerPhotoService;
 import com.ilro.backend.global.auth.AuthPrincipal;
 import com.ilro.backend.global.common.response.ApiResponse;
 import jakarta.validation.Valid;
@@ -29,6 +31,7 @@ public class OwnerInquiryController {
 
     private final OwnerInquiryService inquiryService;
     private final InquiryMessageService messageService;
+    private final OwnerPhotoService photoService;
 
     // B-10 오늘 방문·확인 필요 문의·대기 중 상담 요청·미확인 알림 수
     @GetMapping("/home")
@@ -57,6 +60,13 @@ public class OwnerInquiryController {
     public ApiResponse<MessagesResponse> getMessages(AuthPrincipal principal, @PathVariable Long inquiryId,
                                                      @RequestParam(required = false) Long afterId) {
         return ApiResponse.onSuccess(messageService.getOwnerMessages(principal, inquiryId, afterId));
+    }
+
+    // B-13 사진 보기용 짧은 유효기간 주소 (BE-06) - 상세의 photos[].photoId로 한 장씩, 만료되면 다시 요청
+    @GetMapping("/inquiries/{inquiryId}/photos/{photoId}/url")
+    public ApiResponse<PhotoUrl> getPhotoUrl(AuthPrincipal principal, @PathVariable Long inquiryId,
+                                             @PathVariable Long photoId) {
+        return ApiResponse.onSuccess(photoService.viewUrl(principal, inquiryId, photoId));
     }
 
     // B-14 방문정보·접수 항목 수정 (출처 OWNER, 이력 보존) - 바뀐 뒤의 상세를 돌려줌
