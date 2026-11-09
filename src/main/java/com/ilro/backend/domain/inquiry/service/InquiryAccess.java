@@ -18,10 +18,12 @@ import org.springframework.stereotype.Component;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
-// 고객 문의 API 공통 확인 (명세 1.5·1.7)
-// 문의 토큰은 발급받은 그 문의에만 쓰임 - 다른 문의·삭제된 문의는 있다는 사실도 숨기고 404
-// 고객 토큰(cus_)은 문의를 고른 뒤 새로 받은 문의 토큰으로 써야 하므로(BE-18) 여기서는 403
+// 문의 API 공통 확인 (명세 1.5·1.7·1.8)
+// 고객: 문의 토큰은 발급받은 그 문의에만 쓰임 - 다른 문의·삭제된 문의는 있다는 사실도 숨기고 404
+//   고객 토큰(cus_)은 문의를 고른 뒤 새로 받은 문의 토큰으로 써야 하므로(BE-18) 여기서는 403
+// 사장님: 자기 업체 문의만 - 다른 업체·삭제된 문의는 404
 @Component
 @RequiredArgsConstructor
 public class InquiryAccess {
@@ -46,11 +48,36 @@ public class InquiryAccess {
                 .orElseThrow(() -> new BusinessException(InquiryErrorCode.INQUIRY_NOT_FOUND));
     }
 
-    // 종료된 상담 409, 상담을 받을 수 없게 된 업체 403, 필수 동의 없음 403
-    public void checkWritable(Inquiry inquiry) {
+    public Inquiry findOwned(AuthPrincipal principal, Long inquiryId) {
+        checkOwner(principal);
+        return inquiryRepository.findById(inquiryId)
+                .filter(inquiry -> isOwnedBy(inquiry, principal))
+                .orElseThrow(() -> new BusinessException(InquiryErrorCode.INQUIRY_NOT_FOUND));
+    }
+
+    // 사장님 쓰기도 고객 쓰기와 같은 문의 행 잠금으로 차례로 처리
+    // 먼저 읽고 잠그면 이미 읽은 값(version)이 갱신되지 않으므로 바로 잠근 뒤 업체를 확인
+    public Inquiry lockOwned(AuthPrincipal principal, Long inquiryId) {
+        return tryLockOwned(principal, inquiryId)
+                .orElseThrow(() -> new BusinessException(InquiryErrorCode.INQUIRY_NOT_FOUND));
+    }
+
+    // 자기 업체 문의가 아니면 빈 값 - 문의 밖의 대상(상담 요청 등)을 찾을 때 그 대상의 404로 바꿔 씀
+    public Optional<Inquiry> tryLockOwned(AuthPrincipal principal, Long inquiryId) {
+        checkOwner(principal);
+        return inquiryRepository.findByIdForUpdate(inquiryId).filter(inquiry -> isOwnedBy(inquiry, principal));
+    }
+
+    // 종료된 문의는 고치거나 답할 수 없음 (409)
+    public void checkOpen(Inquiry inquiry) {
         if (inquiry.getStatus() == InquiryStatus.CLOSED) {
             throw new BusinessException(InquiryErrorCode.INQUIRY_CLOSED);
         }
+    }
+
+    // 종료된 상담 409, 상담을 받을 수 없게 된 업체 403, 필수 동의 없음 403
+    public void checkWritable(Inquiry inquiry) {
+        checkOpen(inquiry);
         if (!inquiry.getOwner().isServingCustomers()) {
             throw new BusinessException(InquiryErrorCode.OWNER_UNAVAILABLE);
         }
@@ -95,5 +122,15 @@ public class InquiryAccess {
         if (!principal.inquiryId().equals(inquiryId)) {
             throw new BusinessException(InquiryErrorCode.INQUIRY_NOT_FOUND);
         }
+    }
+
+    private static void checkOwner(AuthPrincipal principal) {
+        if (principal.type() != AuthTokenType.OWNER) {
+            throw new BusinessException(CommonErrorCode.FORBIDDEN);
+        }
+    }
+
+    private static boolean isOwnedBy(Inquiry inquiry, AuthPrincipal principal) {
+        return !inquiry.isDeleted() && inquiry.getOwner().getId().equals(principal.ownerId());
     }
 }

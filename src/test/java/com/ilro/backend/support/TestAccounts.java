@@ -87,6 +87,7 @@ public class TestAccounts {
             jdbc.update("DELETE FROM phone_verification WHERE target_inquiry_id IN " + inquiries, ownerId);
             jdbc.update("DELETE FROM inquiry_field WHERE inquiry_id IN " + inquiries, ownerId);
             jdbc.update("DELETE FROM photo WHERE inquiry_id IN " + inquiries, ownerId);
+            jdbc.update("DELETE FROM handoff_request WHERE inquiry_id IN " + inquiries, ownerId);
             // AI 답변 → AI 판단 → 고객 메시지 (서로 가리킴)
             jdbc.update("DELETE FROM message WHERE ai_decision_id IS NOT NULL AND inquiry_id IN " + inquiries,
                     ownerId);

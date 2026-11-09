@@ -26,4 +26,10 @@ public interface AuthTokenRepository extends JpaRepository<AuthToken, Long> {
     @Query("update AuthToken t set t.revokedAt = :now where t.owner.id = :ownerId "
             + "and t.tokenType = com.ilro.backend.domain.auth.entity.AuthTokenType.OWNER and t.revokedAt is null")
     int revokeOwnerTokens(@Param("ownerId") Long ownerId, @Param("now") Instant now);
+
+    // 문의 종료·삭제 때 그 문의의 고객 상담 토큰(기기마다 하나) 전부 철회 (명세 1.5)
+    @Modifying
+    @Query("update AuthToken t set t.revokedAt = :now where t.inquiry.id = :inquiryId "
+            + "and t.tokenType = com.ilro.backend.domain.auth.entity.AuthTokenType.INQUIRY and t.revokedAt is null")
+    int revokeInquiryTokens(@Param("inquiryId") Long inquiryId, @Param("now") Instant now);
 }

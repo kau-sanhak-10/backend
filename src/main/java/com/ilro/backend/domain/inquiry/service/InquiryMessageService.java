@@ -30,7 +30,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
-// 고객 대화 저장·가져오기 (C-04·C-07·C-09·C-11, 명세 4.2·6.1)
+// 대화 저장·가져오기 - 고객(C-04·C-07·C-09·C-11)·사장님 대화 보기(B-13), 명세 4.2·6.1
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
@@ -50,7 +50,15 @@ public class InquiryMessageService {
     }
 
     public MessagesResponse getMessages(AuthPrincipal principal, Long inquiryId, Long afterId) {
-        Inquiry inquiry = inquiryAccess.find(principal, inquiryId);
+        return page(principal, inquiryAccess.find(principal, inquiryId), afterId);
+    }
+
+    // 사장님 대화 보기 (B-13·B-15) - 자기 업체 문의만
+    public MessagesResponse getOwnerMessages(AuthPrincipal principal, Long inquiryId, Long afterId) {
+        return page(principal, inquiryAccess.findOwned(principal, inquiryId), afterId);
+    }
+
+    private MessagesResponse page(AuthPrincipal principal, Inquiry inquiry, Long afterId) {
         List<Message> found = messageRepository.findByInquiryIdAndIdGreaterThanOrderByIdAsc(inquiry.getId(),
                 afterId == null ? 0L : afterId, Limit.of(PAGE_SIZE + 1));
         boolean hasMore = found.size() > PAGE_SIZE;
@@ -61,7 +69,7 @@ public class InquiryMessageService {
                         Collectors.mapping(Photo::getId, Collectors.toList())));
         // 2초마다 오는 빈 조회까지 남기면 기록이 묻히므로 대화를 돌려줄 때만
         if (!messages.isEmpty()) {
-            AccessLog.record(principal, "VIEW", "inquiry.messages", inquiryId);
+            AccessLog.record(principal, "VIEW", "inquiry.messages", inquiry.getId());
         }
         return new MessagesResponse(messages.stream()
                 .map(message -> MessageItem.of(message, photoIds.getOrDefault(message.getId(), List.of())))
@@ -69,7 +77,7 @@ public class InquiryMessageService {
     }
 
     // 문의 행을 잠그고 처리 - 같은 clientMsgId가 동시에 와도 하나만 저장 (uq_message_inquiry_client_msg)
-    // 메시지를 넣는 다른 곳(AI 답변·사장님 답변, BE-08)도 같은 잠금을 잡아야 함:
+    // 메시지를 넣는 다른 곳(AI 답변·사장님 답변)도 같은 잠금을 잡아야 함:
     // 잠금 없이 동시에 넣으면 id 순서와 커밋 순서가 어긋나 afterId로 가져갈 때 메시지를 건너뛸 수 있음
     @Transactional
     public SentMessage sendMessage(AuthPrincipal principal, Long inquiryId, SendMessageRequest request) {
@@ -84,6 +92,10 @@ public class InquiryMessageService {
         Optional<Message> sent = messageRepository.findByInquiryIdAndClientMsgId(inquiry.getId(),
                 request.clientMsgId());
         if (sent.isPresent()) {
+            if (sent.get().getSender() != MessageSender.CUSTOMER) {
+                throw new BusinessException(CommonErrorCode.INVALID_INPUT,
+                        List.of(new FieldErrorResponse("clientMsgId", "이미 쓰인 메시지 ID예요. 새 ID로 보내 주세요")));
+            }
             return new SentMessage(SendMessageResponse.of(sent.get(), aiStatus(inquiry)), false);
         }
         inquiryAccess.checkWritable(inquiry);

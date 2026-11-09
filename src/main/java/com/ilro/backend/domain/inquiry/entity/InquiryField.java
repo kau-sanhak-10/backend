@@ -25,6 +25,9 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class InquiryField extends BaseCreatedEntity {
 
+    // 미확인 이유 - 서로 다른 값
+    public static final String CONFLICT = "CONFLICT";
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -84,5 +87,12 @@ public class InquiryField extends BaseCreatedEntity {
         this.aiDecision = aiDecision;
         this.message = message;
         this.unconfirmedReason = unconfirmedReason;
+    }
+
+    // 사장님이 정해야 하는 값 - 사장님이 정한 값, 또는 그 값을 고객이 다르게 고쳐 미확인으로 둔 값
+    // 고객이 '모름'으로 지우거나 AI가 덮어쓰지 못함. AI가 찾은 충돌(판단 기록이 있음)은 고객 답으로 풀림
+    public boolean isOwnerDecision() {
+        return source == InquiryFieldSource.OWNER || (status == InquiryFieldStatus.UNCONFIRMED
+                && CONFLICT.equals(unconfirmedReason) && aiDecision == null);
     }
 }

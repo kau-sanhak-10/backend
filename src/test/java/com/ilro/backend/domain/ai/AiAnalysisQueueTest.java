@@ -87,23 +87,27 @@ class AiAnalysisQueueTest {
     }
 
     @Test
-    @DisplayName("놓친 분석 찾기 - 90초 넘게 답이 없는 24시간 안의 고객 메시지만, 다시 요청하면 답함")
+    @DisplayName("놓친 분석 찾기 - 90초 넘게 AI·사장님 답이 없는 24시간 안의 고객 메시지만, 다시 요청하면 답함")
     void findsMissedMessages() throws Exception {
         long missed = startInquiry().inquiryId();
         long fresh = startInquiry().inquiryId();
         long tooOld = startInquiry().inquiryId();
         long answered = startInquiry().inquiryId();
+        long ownerAnswered = startInquiry().inquiryId();
         customerMessage(missed, "5 minutes");
         customerMessage(fresh, "10 seconds");
         customerMessage(tooOld, "2 days");
         long answeredMessage = customerMessage(answered, "5 minutes");
+        customerMessage(ownerAnswered, "5 minutes");
+        jdbc.update("INSERT INTO message (inquiry_id, sender, content, delivery_status, created_at) "
+                + "VALUES (?, 'OWNER', '사진 보내 주세요', 'SENT', CURRENT_TIMESTAMP - interval '4 minutes')", ownerAnswered);
         jdbc.update("INSERT INTO ai_decision (inquiry_id, message_id, stage, action, decided_by, status) "
                 + "VALUES (?, ?, 'DECIDE', 'ASK_MORE_INFO', 'RULE', 'SUCCESS')", answered, answeredMessage);
 
         Instant now = Instant.now();
         assertThat(inquiryRepository.findWaitingForAi(now.minus(Duration.ofHours(24)), now.minusSeconds(90), 50))
                 .contains(missed)
-                .doesNotContain(fresh, tooOld, answered);
+                .doesNotContain(fresh, tooOld, answered, ownerAnswered);
 
         queue.request(missed);
         assertThat(waitForAiReply(missed)).startsWith("[가짜 응답] ");
