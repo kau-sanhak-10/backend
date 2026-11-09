@@ -18,6 +18,14 @@ public record AnalyzeRequest(String requestId, Long inquiryId, Long ownerId, lon
                              Map<String, Integer> askCounts, List<MessageItem> messages, List<PhotoItem> photos,
                              boolean safetyFlag) {
 
+    // DB 기록(input_snapshot)용 - 사진 주소에는 임시 자격 증명이 들어 있어 비우고 사진·메시지 번호만 남김
+    public AnalyzeRequest withoutImageUrls() {
+        return new AnalyzeRequest(requestId, inquiryId, ownerId, inputVersion, handlerMode, business, fields,
+                askCounts, messages,
+                photos.stream().map(photo -> new PhotoItem(photo.photoId(), photo.messageId(), null)).toList(),
+                safetyFlag);
+    }
+
     public record Business(List<WorkCategory> activeWorkCategories, boolean autoBookingEnabled) {
     }
 
@@ -30,7 +38,7 @@ public record AnalyzeRequest(String requestId, Long inquiryId, Long ownerId, lon
     public record MessageItem(Long messageId, MessageSender sender, String content, OffsetDateTime createdAt) {
     }
 
-    // imageUrl: 1024px 리사이즈본의 짧은 유효기간 주소
+    // imageUrl: 원본의 비공개 S3 임시 HTTPS 주소 (10분) - 줄이는 건 AI 서버가 함 (11/9 AI 팀 합의, 명세 6.2 변경)
     public record PhotoItem(Long photoId, Long messageId, String imageUrl) {
     }
 }
