@@ -300,6 +300,35 @@ class AiAnalysisFlowTest {
     }
 
     @Test
+    @DisplayName("분석 중 사장님이 직접 응대를 시작하면(API) 결과는 STALE, 그 뒤 고객 메시지에도 AI가 답하지 않음")
+    void takeoverApiDuringCall() throws Exception {
+        Session session = startInquiry();
+        send(session, "물이 새요");
+        String ownerToken = accounts.ownerToken(ownerId);
+        long seqBefore = ((Number) inquiry(session).get("ai_input_seq")).longValue();
+        ai.then(request -> {
+            try {
+                postAs(ownerToken, "/api/v1/owner/inquiries/" + session.inquiryId() + "/takeover", "")
+                        .andExpect(status().isOk());
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+            return ok(answer("CHECK_SCHEDULE", "DONE").build(request));
+        });
+
+        analysisService.analyze(session.inquiryId());
+        send(session, "언제 와요?");
+        analysisService.analyze(session.inquiryId());
+
+        assertThat(ai.requests()).hasSize(1);
+        assertThat(decisionStatuses(session)).containsExactly("STALE");
+        assertThat(aiMessages(session)).isZero();
+        // 직접 응대 시작 +1, 고객 메시지 +1
+        assertThat(inquiry(session)).containsEntry("status", "COLLECTING")
+                .containsEntry("ai_input_seq", seqBefore + 2);
+    }
+
+    @Test
     @DisplayName("시간 초과 뒤 두 번째 시도에서 성공 - 같은 요청 ID, 실패 기록엔 판단값 없이")
     void retryAfterTimeout() throws Exception {
         Session session = startInquiry();
@@ -450,6 +479,123 @@ class AiAnalysisFlowTest {
     }
 
     @Test
+    @DisplayName("사장님 값을 고객이 다르게 고친 충돌은 AI가 풀지 못함 - 사장님이 정할 때까지 그대로")
+    void customerConflictStays() throws Exception {
+        Session session = startInquiry();
+        jdbc.update("INSERT INTO inquiry_field (inquiry_id, field_key, field_value, source, status, unconfirmed_reason) "
+                + "VALUES (?, 'manufacturer', '귀뚜라미', 'CUSTOMER', 'UNCONFIRMED', 'CONFLICT')", session.inquiryId());
+        long messageId = send(session, "경동나비엔이에요");
+        ai.then(reply(answer("ASK_MORE_INFO", "MISSING_FIELD").fact("manufacturer", "경동나비엔", messageId)));
+
+        analysisService.analyze(session.inquiryId());
+
+        assertThat(jdbc.queryForList("SELECT field_value || '/' || status || '/' || unconfirmed_reason "
+                + "FROM inquiry_field WHERE inquiry_id = ? AND field_key = 'manufacturer' AND is_current", String.class,
+                session.inquiryId())).containsExactly("귀뚜라미/UNCONFIRMED/CONFLICT");
+    }
+
+    @Test
+    @DisplayName("AI가 찾은 충돌 - 그 항목은 미확인(CONFLICT), 이전 값은 이력. 고객이 다시 답하면 확인됨")
+    void aiConflictIsUnconfirmed() throws Exception {
+        Session session = startInquiry();
+        long first = send(session, "난방이 안 돼요");
+        ai.then(reply(answer("ASK_MORE_INFO", "MISSING_FIELD").fact("symptom", "난방이 안 돼요", first)));
+        analysisService.analyze(session.inquiryId());
+        long second = send(session, "아니 온수가 안 나와요");
+        ai.then(reply(answer("ASK_MORE_INFO", "MISSING_FIELD").targets("symptom")
+                .conflict("symptom", candidate("난방이 안 돼요", "CUSTOMER", first),
+                        candidate("온수가 안 나와요", "CUSTOMER", second))));
+
+        analysisService.analyze(session.inquiryId());
+
+        long decisionId = jdbc.queryForObject("SELECT max(id) FROM ai_decision WHERE inquiry_id = ?", Long.class,
+                session.inquiryId());
+        assertThat(jdbc.queryForMap("SELECT field_value, source, status, unconfirmed_reason, message_id, "
+                + "ai_decision_id FROM inquiry_field WHERE inquiry_id = ? AND field_key = 'symptom' AND is_current",
+                session.inquiryId()))
+                .containsEntry("field_value", "온수가 안 나와요")
+                .containsEntry("source", "CUSTOMER")
+                .containsEntry("status", "UNCONFIRMED")
+                .containsEntry("unconfirmed_reason", "CONFLICT")
+                .containsEntry("message_id", second)
+                .containsEntry("ai_decision_id", decisionId);
+        assertThat(jdbc.queryForList("SELECT field_value || '/' || status FROM inquiry_field WHERE inquiry_id = ? "
+                + "AND field_key = 'symptom' AND NOT is_current", String.class, session.inquiryId()))
+                .containsExactly("난방이 안 돼요/CONFIRMED");
+        // 고객에게 다시 묻는 중 - 사장님 확인·알림은 AI가 질문 한도에 닿을 때
+        assertThat(inquiry(session)).containsEntry("status", "COLLECTING");
+        assertThat(notifications(session)).isZero();
+
+        long third = send(session, "온수가 안 나와요");
+        ai.then(reply(answer("CHECK_SCHEDULE", "DONE").fact("symptom", "온수가 안 나와요", third)));
+        analysisService.analyze(session.inquiryId());
+
+        AnalyzeRequest asked = ai.requests().get(2);
+        assertThat(asked.fields()).singleElement().satisfies(field -> {
+            assertThat(field.fieldKey()).isEqualTo("symptom");
+            assertThat(field.unconfirmedReason()).isEqualTo("CONFLICT");
+        });
+        assertThat(jdbc.queryForList("SELECT field_value || '/' || status FROM inquiry_field WHERE inquiry_id = ? "
+                + "AND field_key = 'symptom' AND is_current", String.class, session.inquiryId()))
+                .containsExactly("온수가 안 나와요/CONFIRMED");
+    }
+
+    @Test
+    @DisplayName("사장님 값과 부딪힌 충돌 - 사장님 값은 그대로 (명세 6.4), 고객이 다르게 말한 내용은 판단 기록에")
+    void conflictWithOwnerValue() throws Exception {
+        Session session = startInquiry();
+        jdbc.update("INSERT INTO inquiry_field (inquiry_id, field_key, field_value, source, status) "
+                + "VALUES (?, 'symptom', '누수', 'OWNER', 'CONFIRMED')", session.inquiryId());
+        long messageId = send(session, "물은 안 새고 온수가 안 나와요");
+        ai.then(reply(answer("ASK_MORE_INFO", "MISSING_FIELD").targets("symptom")
+                .conflict("symptom", new AnalyzeResult.Candidate("누수", "OWNER", null),
+                        candidate("온수가 안 나와요", "CUSTOMER", messageId))));
+
+        analysisService.analyze(session.inquiryId());
+
+        assertThat(decisionStatuses(session)).containsExactly("SUCCESS");
+        assertThat(jdbc.queryForList("SELECT field_value || '/' || source || '/' || status FROM inquiry_field "
+                + "WHERE inquiry_id = ? AND field_key = 'symptom'", String.class, session.inquiryId()))
+                .containsExactly("누수/OWNER/CONFIRMED");
+        assertThat(jdbc.queryForObject("SELECT output_raw::text LIKE '%온수가 안 나와요%' FROM ai_decision "
+                + "WHERE inquiry_id = ?", Boolean.class, session.inquiryId())).isTrue();
+        assertThat(inquiry(session)).containsEntry("status", "COLLECTING");
+        assertThat(notifications(session)).isZero();
+        assertThat(aiMessages(session)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("충돌 규칙 위반 - 다른 문의의 근거·후보 하나·필수 충돌 중 방문 시간 고르기는 출력 오류")
+    void conflictViolations() throws Exception {
+        Session session = startInquiry();
+        long messageId = send(session, "온수가 안 나와요");
+        ai.then(reply(answer("ASK_MORE_INFO", "MISSING_FIELD")
+                        .conflict("symptom", candidate("난방", "CUSTOMER", messageId),
+                                candidate("온수", "CUSTOMER", messageId + 100_000))))
+                .then(reply(answer("ASK_MORE_INFO", "MISSING_FIELD")
+                        .conflict("symptom", candidate("온수", "CUSTOMER", messageId))));
+
+        analysisService.analyze(session.inquiryId());
+
+        assertThat(decisionStatuses(session)).containsExactly("INVALID_OUTPUT", "INVALID_OUTPUT");
+        assertThat(jdbc.queryForList("SELECT error_message FROM ai_decision WHERE inquiry_id = ? ORDER BY id",
+                String.class, session.inquiryId()))
+                .containsExactly("RULE_VIOLATION conflicts[0].candidates", "RULE_VIOLATION conflicts[0].candidates");
+
+        Session scheduling = startInquiry();
+        long other = send(scheduling, "온수가 안 나와요");
+        Function<AnalyzeRequest, AiCallResult> toSchedule = reply(answer("CHECK_SCHEDULE", "DONE")
+                .conflict("symptom", candidate("난방", "CUSTOMER", other), candidate("온수", "CUSTOMER", other)));
+        ai.then(toSchedule).then(toSchedule);
+        analysisService.analyze(scheduling.inquiryId());
+        assertThat(jdbc.queryForList("SELECT error_message FROM ai_decision WHERE inquiry_id = ? ORDER BY id",
+                String.class, scheduling.inquiryId()))
+                .containsExactly("RULE_VIOLATION nextAction", "RULE_VIOLATION nextAction");
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM inquiry_field WHERE inquiry_id = ?", Integer.class,
+                scheduling.inquiryId())).isZero();
+    }
+
+    @Test
     @DisplayName("안전 신호 - 다음 행동과 상관없이 안전 표시·사장님 확인·알림")
     void safetyFlag() throws Exception {
         Session session = startInquiry();
@@ -514,6 +660,7 @@ class AiAnalysisFlowTest {
         private final String action;
         private final String ruleReason;
         private final List<Fact> facts = new ArrayList<>();
+        private final List<AnalyzeResult.Conflict> conflicts = new ArrayList<>();
         private List<String> targets = List.of();
         private String category;
         private boolean safety;
@@ -538,6 +685,12 @@ class AiAnalysisFlowTest {
             return this;
         }
 
+        // 실제 AI 서버처럼 facts 없이 충돌만 - 후보는 기존 값 → 새 값 순서
+        Answer conflict(String fieldKey, AnalyzeResult.Candidate... candidates) {
+            conflicts.add(new AnalyzeResult.Conflict(fieldKey, List.of(candidates)));
+            return this;
+        }
+
         Answer category(String workCategory) {
             this.category = workCategory;
             return this;
@@ -556,7 +709,7 @@ class AiAnalysisFlowTest {
         AnalyzeResult build(AnalyzeRequest request) {
             return new AnalyzeResult(request.requestId(), request.inquiryId(), request.inputVersion(), "rules@abc123",
                     "v5.2", decidedBy, "claude-haiku-4-5", new AnalyzeResult.Usage(1200, 900, 120), facts,
-                    List.of(), List.of(),
+                    conflicts, List.of(),
                     new AnalyzeResult.WorkCategoryDecision(category, category == null ? "UNCONFIRMED" : "CONFIRMED"),
                     new AnalyzeResult.Safety(safety, safety ? List.of("GAS_SMELL") : List.of()), "ANSWER",
                     new AnalyzeResult.NextAction(action, ruleReason, targets, "test"),
@@ -566,6 +719,10 @@ class AiAnalysisFlowTest {
 
     private static Answer answer(String action, String ruleReason) {
         return new Answer(action, ruleReason);
+    }
+
+    private static AnalyzeResult.Candidate candidate(String value, String source, long messageId) {
+        return new AnalyzeResult.Candidate(value, source, new Evidence(messageId, null));
     }
 
     private Function<AnalyzeRequest, AiCallResult> reply(Answer answer) {

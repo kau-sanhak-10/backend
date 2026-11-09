@@ -1,6 +1,7 @@
 package com.ilro.backend.domain.inquiry.repository;
 
 import com.ilro.backend.domain.inquiry.entity.InquiryField;
+import com.ilro.backend.domain.inquiry.entity.InquiryFieldStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -20,4 +21,16 @@ public interface InquiryFieldRepository extends JpaRepository<InquiryField, Long
     @Query("update InquiryField f set f.isCurrent = false "
             + "where f.inquiry.id = :inquiryId and f.fieldKey in :fieldKeys and f.isCurrent = true")
     int retireCurrent(@Param("inquiryId") Long inquiryId, @Param("fieldKeys") Collection<String> fieldKeys);
+
+    // 현재값이 이 상태·이유인 항목을 가진 문의
+    @Query("select distinct f.inquiry.id from InquiryField f where f.inquiry.id in :inquiryIds and f.isCurrent = true "
+            + "and f.fieldKey in :fieldKeys and f.status = :status and f.unconfirmedReason in :reasons")
+    List<Long> findInquiryIdsWith(@Param("inquiryIds") Collection<Long> inquiryIds,
+                                  @Param("fieldKeys") Collection<String> fieldKeys,
+                                  @Param("status") InquiryFieldStatus status,
+                                  @Param("reasons") Collection<String> reasons);
+
+    // 항목별 현재값과 수정 이력 (B-13) - 오래된 것부터
+    @Query("select f from InquiryField f where f.inquiry.id = :inquiryId order by f.id")
+    List<InquiryField> findAllOf(@Param("inquiryId") Long inquiryId);
 }

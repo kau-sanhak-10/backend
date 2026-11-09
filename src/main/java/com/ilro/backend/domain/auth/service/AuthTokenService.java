@@ -97,6 +97,12 @@ public class AuthTokenService {
         return authTokenRepository.revokeOwnerTokens(ownerId, clock.instant());
     }
 
+    // 문의 종료·삭제 때 그 문의의 고객 상담 토큰 전부 (B-16, 명세 1.5) - 예약 조회 토큰(cus_)은 그대로
+    @Transactional
+    public int revokeInquiryTokens(Long inquiryId) {
+        return authTokenRepository.revokeInquiryTokens(inquiryId, clock.instant());
+    }
+
     static String hash(String token) {
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(token.getBytes(StandardCharsets.UTF_8));

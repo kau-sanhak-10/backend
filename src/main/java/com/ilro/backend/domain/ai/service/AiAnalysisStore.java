@@ -22,12 +22,7 @@ import com.ilro.backend.domain.inquiry.repository.InquiryRepository;
 import com.ilro.backend.domain.inquiry.repository.MessageRepository;
 import com.ilro.backend.domain.inquiry.repository.PhotoRepository;
 import com.ilro.backend.domain.inquiry.service.InquiryAccess;
-import com.ilro.backend.domain.notification.entity.Notification;
-import com.ilro.backend.domain.notification.entity.NotificationChannel;
-import com.ilro.backend.domain.notification.entity.NotificationEventType;
-import com.ilro.backend.domain.notification.entity.NotificationRecipient;
-import com.ilro.backend.domain.notification.entity.NotificationRefType;
-import com.ilro.backend.domain.notification.repository.NotificationRepository;
+import com.ilro.backend.domain.notification.service.NeedsCheckNotifier;
 import com.ilro.backend.domain.owner.entity.Owner;
 import com.ilro.backend.domain.owner.entity.OwnerWorkType;
 import com.ilro.backend.domain.owner.repository.OwnerWorkTypeRepository;
@@ -35,6 +30,8 @@ import com.ilro.backend.global.common.util.KstTime;
 import com.ilro.backend.infra.ai.AiCallResult;
 import com.ilro.backend.infra.ai.AnalyzeRequest;
 import com.ilro.backend.infra.ai.AnalyzeResult;
+import com.ilro.backend.infra.ai.AnalyzeResult.Candidate;
+import com.ilro.backend.infra.ai.AnalyzeResult.Conflict;
 import com.ilro.backend.infra.ai.AnalyzeResult.Evidence;
 import com.ilro.backend.infra.ai.AnalyzeResult.Fact;
 import lombok.RequiredArgsConstructor;
@@ -83,7 +80,7 @@ public class AiAnalysisStore {
     private final InquiryFieldRepository fieldRepository;
     private final AiDecisionRepository decisionRepository;
     private final OwnerWorkTypeRepository workTypeRepository;
-    private final NotificationRepository notificationRepository;
+    private final NeedsCheckNotifier needsCheckNotifier;
     private final JsonMapper jsonMapper;
 
     // 이번에 보낼 요청과 기록에 필요한 값
@@ -108,6 +105,7 @@ public class AiAnalysisStore {
     }
 
     // 분석할 게 없으면 빈 값: AI가 답하는 상담이 아님 · 고객 메시지 없음 · 마지막 고객 메시지에 이미 답함
+    // (AI 답변, 또는 직접 응대 중 사장님 답변 - AI 재개 뒤 같은 질문에 다시 답하지 않음)
     // 방문정보·접수정보만 바뀐 경우엔 새로 답하지 않음 (분석 중이던 작업만 최신 입력으로 다시 함)
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     public Optional<Snapshot> prepare(Long inquiryId) {
@@ -118,7 +116,10 @@ public class AiAnalysisStore {
         long inputVersion = inquiry.getAiInputSeq();
         Message lastCustomer = messageRepository
                 .findFirstByInquiryIdAndSenderOrderByIdDesc(inquiryId, MessageSender.CUSTOMER).orElse(null);
-        boolean answered = lastCustomer == null || decisionRepository
+        boolean answered = lastCustomer == null
+                || messageRepository.existsByInquiryIdAndSenderAndIdGreaterThan(inquiryId, MessageSender.OWNER,
+                        lastCustomer.getId())
+                || decisionRepository
                 .findFirstByInquiryIdAndStageAndStatusOrderByIdDesc(inquiryId, AiStage.DECIDE, AiDecisionStatus.SUCCESS)
                 .filter(applied -> Objects.equals(applied.getInputVersion(), inputVersion)
                         || (applied.getMessage() != null && applied.getMessage().getId() >= lastCustomer.getId()))
@@ -159,6 +160,7 @@ public class AiAnalysisStore {
         int versionBefore = inquiry.getVersion();
         AiDecision decision = decisionRepository.save(decision(inquiry, snapshot, call, AiDecisionStatus.SUCCESS));
         applyFacts(inquiry, decision, result.facts());
+        applyConflicts(inquiry, decision, result);
         applyWorkCategory(inquiry, result.workCategory());
         // 고객 화면은 메시지 가져오기로 받으므로 저장되면 전달 완료
         Message reply = Message.builder()
@@ -256,7 +258,7 @@ public class AiAnalysisStore {
     }
 
     // 사실(facts)만 접수 항목에 - 출처는 AI 제안(CUSTOMER·PHOTO), 근거 메시지·사진과 이 판단을 함께 남김
-    // 사장님이 정한 값은 덮어쓰지 않고, 내용이 그대로인 항목은 건너뜀 (명세 6.3·6.4)
+    // 사장님이 정할 값(사장님 값·그 값과 고객 값의 충돌)은 덮어쓰지 않고, 내용이 그대로인 항목은 건너뜀 (명세 6.3·6.4)
     private void applyFacts(Inquiry inquiry, AiDecision decision, List<Fact> facts) {
         if (facts == null || facts.isEmpty()) {
             return;
@@ -266,7 +268,7 @@ public class AiAnalysisStore {
         List<InquiryField> rows = new ArrayList<>();
         for (Fact fact : facts) {
             InquiryField before = current.get(fact.fieldKey());
-            if (before != null && before.getSource() == InquiryFieldSource.OWNER) {
+            if (before != null && before.isOwnerDecision()) {
                 continue;
             }
             InquiryFieldSource source = InquiryFieldSource.valueOf(fact.source());
@@ -290,6 +292,57 @@ public class AiAnalysisStore {
                             : messageRepository.getReferenceById(evidence.messageId()))
                     .aiDecision(decision)
                     .build());
+        }
+        if (rows.isEmpty()) {
+            return;
+        }
+        fieldRepository.retireCurrent(inquiry.getId(), rows.stream().map(InquiryField::getFieldKey).toList());
+        fieldRepository.saveAll(rows);
+        for (InquiryField row : rows) {
+            inquiry.applyField(InquiryFieldKey.fromKey(row.getFieldKey()).orElseThrow(), row.getFieldValue());
+        }
+    }
+
+    // 같은 항목의 서로 다른 값 (명세 6.3) - 그 항목을 미확인(CONFLICT)으로 두고 이전 값은 이력(is_current=false)으로
+    // 값·근거는 가장 최근 고객 설명·사진 (후보 전체는 output_raw). facts에 같은 항목이 있으면 facts를 따름
+    // 이 판단을 남김 - 다음 답에서 AI가 확인하면 확인됨으로 바뀜 (그 전엔 AI가 보완 질문, 한도가 차면 사장님 확인)
+    // 사장님이 정할 값(사장님 값·그 값과 고객 값의 충돌)은 facts처럼 덮어쓰지 않음 (명세 6.4)
+    //   - 고객이 다르게 말한 내용은 이 판단의 conflicts(사장님 상세의 AI 요약)로 사장님이 봄
+    private void applyConflicts(Inquiry inquiry, AiDecision decision, AnalyzeResult result) {
+        if (result.conflicts() == null || result.conflicts().isEmpty()) {
+            return;
+        }
+        Set<String> factKeys = result.facts() == null ? Set.of()
+                : result.facts().stream().map(Fact::fieldKey).collect(Collectors.toSet());
+        Map<String, InquiryField> current = fieldRepository.findCurrent(inquiry.getId()).stream()
+                .collect(Collectors.toMap(InquiryField::getFieldKey, Function.identity()));
+        List<InquiryField> rows = new ArrayList<>();
+        for (Conflict conflict : result.conflicts()) {
+            InquiryField before = current.get(conflict.fieldKey());
+            if (factKeys.contains(conflict.fieldKey()) || (before != null && before.isOwnerDecision())) {
+                continue;
+            }
+            // 검사(AiResultValidator)에서 근거 있는 새 후보가 있는 것만 통과
+            Candidate latest = conflict.latestObserved().orElseThrow();
+            if (before != null && before.getStatus() == InquiryFieldStatus.UNCONFIRMED
+                    && InquiryField.CONFLICT.equals(before.getUnconfirmedReason())
+                    && Objects.equals(before.getFieldValue(), latest.value())) {
+                continue;
+            }
+            Evidence evidence = latest.evidence();
+            InquiryField row = InquiryField.builder()
+                    .inquiry(inquiry)
+                    .fieldKey(conflict.fieldKey())
+                    .fieldValue(latest.value())
+                    .source(InquiryFieldSource.valueOf(latest.source()))
+                    .status(InquiryFieldStatus.UNCONFIRMED)
+                    .unconfirmedReason(InquiryField.CONFLICT)
+                    .photo(evidence.photoId() == null ? null : photoRepository.getReferenceById(evidence.photoId()))
+                    .message(evidence.messageId() == null ? null
+                            : messageRepository.getReferenceById(evidence.messageId()))
+                    .aiDecision(decision)
+                    .build();
+            rows.add(row);
         }
         if (rows.isEmpty()) {
             return;
@@ -335,18 +388,7 @@ public class AiAnalysisStore {
     // 사장님 확인 필요 + 사장님 알림 (입력 버전마다 하나)
     private void needsOwnerCheck(Inquiry inquiry, long inputVersion) {
         inquiry.changeStatus(InquiryStatus.OWNER_CHECK);
-        String dedupeKey = "NEEDS_CHECK:INQUIRY:" + inquiry.getId() + ":" + inputVersion;
-        if (!notificationRepository.existsByDedupeKey(dedupeKey)) {
-            notificationRepository.save(Notification.builder()
-                    .owner(inquiry.getOwner())
-                    .recipient(NotificationRecipient.OWNER)
-                    .eventType(NotificationEventType.NEEDS_CHECK)
-                    .refType(NotificationRefType.INQUIRY)
-                    .refId(inquiry.getId())
-                    .channel(NotificationChannel.IN_APP)
-                    .dedupeKey(dedupeKey)
-                    .build());
-        }
+        needsCheckNotifier.notify(inquiry, "NEEDS_CHECK:INQUIRY:" + inquiry.getId() + ":" + inputVersion);
     }
 
     private AnalyzeRequest.Business business(Owner owner) {

@@ -9,6 +9,8 @@ import com.ilro.backend.domain.inquiry.entity.MessageSender;
 import com.ilro.backend.domain.owner.entity.WorkCategory;
 import com.ilro.backend.infra.ai.AnalyzeRequest;
 import com.ilro.backend.infra.ai.AnalyzeResult;
+import com.ilro.backend.infra.ai.AnalyzeResult.Candidate;
+import com.ilro.backend.infra.ai.AnalyzeResult.Conflict;
 import com.ilro.backend.infra.ai.AnalyzeResult.Evidence;
 import com.ilro.backend.infra.ai.AnalyzeResult.Fact;
 
@@ -63,25 +65,84 @@ final class AiResultValidator {
                 || !isOneOf(category.status(), InquiryFieldStatus.class))) {
             return Optional.of("workCategory");
         }
-        if (result.conflicts() != null && result.conflicts().stream()
-                .anyMatch(conflict -> InquiryFieldKey.fromKey(conflict.fieldKey()).isEmpty())) {
-            return Optional.of("conflicts.fieldKey");
-        }
-        return factViolation(request, result.facts() == null ? List.of() : result.facts());
+        Scope scope = Scope.of(request);
+        return factViolation(scope, result.facts() == null ? List.of() : result.facts())
+                .or(() -> conflictViolation(scope, result));
     }
 
-    // 근거는 이번에 보낸 고객 메시지·사진, 또는 기존 항목이 이미 가진 근거 안에서만
-    private static Optional<String> factViolation(AnalyzeRequest request, List<Fact> facts) {
-        Set<Long> messageIds = Stream.concat(
-                request.messages().stream()
-                        .filter(message -> message.sender() == MessageSender.CUSTOMER)
-                        .map(AnalyzeRequest.MessageItem::messageId),
-                request.fields().stream().map(AnalyzeRequest.Field::messageId).filter(Objects::nonNull))
-                .collect(Collectors.toSet());
-        Set<Long> photoIds = Stream.concat(
-                request.photos().stream().map(AnalyzeRequest.PhotoItem::photoId),
-                request.fields().stream().map(AnalyzeRequest.Field::photoId).filter(Objects::nonNull))
-                .collect(Collectors.toSet());
+    // 근거로 쓸 수 있는 것 - 이번에 보낸 고객 메시지·사진, 또는 기존 항목이 이미 가진 근거
+    private record Scope(Set<Long> messageIds, Set<Long> photoIds) {
+
+        static Scope of(AnalyzeRequest request) {
+            return new Scope(Stream.concat(
+                    request.messages().stream()
+                            .filter(message -> message.sender() == MessageSender.CUSTOMER)
+                            .map(AnalyzeRequest.MessageItem::messageId),
+                    request.fields().stream().map(AnalyzeRequest.Field::messageId).filter(Objects::nonNull))
+                    .collect(Collectors.toSet()),
+                    Stream.concat(
+                            request.photos().stream().map(AnalyzeRequest.PhotoItem::photoId),
+                            request.fields().stream().map(AnalyzeRequest.Field::photoId).filter(Objects::nonNull))
+                            .collect(Collectors.toSet()));
+        }
+
+        // 출처에 맞는 근거 하나 - 고객 설명은 메시지, 사진은 사진
+        boolean matches(String source, Evidence evidence) {
+            return evidence != null && switch (String.valueOf(source)) {
+                case "CUSTOMER" -> evidence.photoId() == null && messageIds.contains(evidence.messageId());
+                case "PHOTO" -> evidence.messageId() == null && photoIds.contains(evidence.photoId());
+                default -> false;
+            };
+        }
+    }
+
+    // 충돌 (명세 6.3): 아는 항목·항목당 하나·후보 둘 이상, 후보 값은 칸 길이 안
+    // 후보 근거는 없어도 되지만(기존 값) 있으면 이 요청 범위 안. 사장님 값 후보는 근거 없이 옴
+    // 서버가 미확인 행에 쓸 마지막 새 후보(고객 설명·사진)는 근거가 있어야 함
+    // 필수 항목이 충돌 중이면 방문 시간 고르기로 넘기지 않음 (AI 서버 규칙과 같음)
+    private static Optional<String> conflictViolation(Scope scope, AnalyzeResult result) {
+        List<Conflict> conflicts = result.conflicts() == null ? List.of() : result.conflicts();
+        Set<String> seen = new HashSet<>();
+        for (int i = 0; i < conflicts.size(); i++) {
+            Conflict conflict = conflicts.get(i);
+            String at = "conflicts[" + i + "]";
+            Optional<InquiryFieldKey> key = conflict == null ? Optional.empty()
+                    : InquiryFieldKey.fromKey(conflict.fieldKey());
+            if (key.isEmpty() || !seen.add(conflict.fieldKey())) {
+                return Optional.of(at + ".fieldKey");
+            }
+            List<Candidate> candidates = conflict.candidates();
+            if (candidates == null || candidates.size() < 2 || candidates.stream().anyMatch(candidate ->
+                    candidate == null || candidate.value() == null || candidate.value().isBlank()
+                            || candidate.value().length() > key.get().getMaxLength()
+                            || !isCandidateSource(candidate.source())
+                            || (candidate.evidence() != null && !candidateEvidenceOk(scope, candidate)))) {
+                return Optional.of(at + ".candidates");
+            }
+            Optional<Candidate> latest = conflict.latestObserved();
+            if (latest.isEmpty() || !scope.matches(latest.get().source(), latest.get().evidence())) {
+                return Optional.of(at + ".candidates");
+            }
+            if (key.get().isRequired() && AiAction.CHECK_SCHEDULE.name().equals(result.nextAction().action())) {
+                return Optional.of("nextAction");
+            }
+        }
+        return Optional.empty();
+    }
+
+    private static boolean isCandidateSource(String source) {
+        return "CUSTOMER".equals(source) || "PHOTO".equals(source) || "OWNER".equals(source);
+    }
+
+    // 사장님 값 후보는 그 값의 근거(메시지·사진) 어느 쪽이든 범위 안이면 됨
+    private static boolean candidateEvidenceOk(Scope scope, Candidate candidate) {
+        if ("OWNER".equals(candidate.source())) {
+            return scope.matches("CUSTOMER", candidate.evidence()) || scope.matches("PHOTO", candidate.evidence());
+        }
+        return scope.matches(candidate.source(), candidate.evidence());
+    }
+
+    private static Optional<String> factViolation(Scope scope, List<Fact> facts) {
         Set<String> seen = new HashSet<>();
         for (int i = 0; i < facts.size(); i++) {
             Fact fact = facts.get(i);
@@ -106,14 +167,8 @@ final class AiResultValidator {
                     || fact.unconfirmedReason().length() > 100)) {
                 return Optional.of(at + ".unconfirmedReason");
             }
-            Evidence evidence = fact.evidence();
-            boolean evidenceOk = evidence != null && switch (String.valueOf(fact.source())) {
-                case "CUSTOMER" -> evidence.photoId() == null && messageIds.contains(evidence.messageId());
-                case "PHOTO" -> evidence.messageId() == null && photoIds.contains(evidence.photoId());
-                // OWNER 등 AI가 만들 수 없는 출처
-                default -> false;
-            };
-            if (!evidenceOk) {
+            // OWNER 등 AI가 만들 수 없는 출처는 근거와 상관없이 위반
+            if (!scope.matches(fact.source(), fact.evidence())) {
                 return Optional.of(at + ".source·evidence");
             }
         }

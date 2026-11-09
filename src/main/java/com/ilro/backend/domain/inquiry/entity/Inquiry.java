@@ -123,6 +123,11 @@ public class Inquiry extends BaseTimeEntity {
     // 고객 전화번호 인증 시각, null이면 예약 확정 불가
     private Instant phoneVerifiedAt;
 
+    // 방문정보를 마지막으로 정한 쪽 (V3) - OWNER면 고객이 다른 값으로 바꾸지 못함, 기록 없으면 null
+    @Enumerated(EnumType.STRING)
+    @Column(length = 20)
+    private VisitInfoSource visitInfoSource;
+
     @Builder
     private Inquiry(Owner owner, Customer customer) {
         this.owner = owner;
@@ -145,14 +150,40 @@ public class Inquiry extends BaseTimeEntity {
         this.status = status;
     }
 
+    // 사장님 확인으로 넘길 수 있는 단계 - AI가 답하던 단계·서비스 불가 단계. 예약된 문의는 예약 단계 그대로
+    public boolean canMoveToOwnerCheck() {
+        return status == InquiryStatus.COLLECTING || status == InquiryStatus.SCHEDULING
+                || status == InquiryStatus.UNSERVICEABLE;
+    }
+
+    public void moveToOwnerCheck() {
+        if (canMoveToOwnerCheck()) {
+            this.status = InquiryStatus.OWNER_CHECK;
+        }
+    }
+
     // 안전 신호 - 자동 예약·AI 재개 차단 (C09·B16)
     public void flagSafety() {
         this.safetyFlag = true;
     }
 
+    // 사장님 직접 응대 (B-15) - AI 답변·자동 예약을 멈춤, 진행 단계는 그대로
+    public void takeOver() {
+        this.handlerMode = HandlerMode.OWNER;
+    }
+
+    // AI 응대 재개 (B-16) - 사장님 확인·서비스 불가 단계였으면 정보 수집부터 다시
+    // 예약된 문의는 예약 단계 그대로 (AI는 정보 수집·시간 선택 단계에서만 답함)
+    public void resumeAi() {
+        this.handlerMode = HandlerMode.AI;
+        if (status == InquiryStatus.OWNER_CHECK || status == InquiryStatus.UNSERVICEABLE) {
+            this.status = InquiryStatus.COLLECTING;
+        }
+    }
+
     // 고객 방문정보 (C-06) - 연락처를 다른 번호로 바꾸면 그 번호로 다시 인증해야 예약 확정 가능 (명세 1.5)
     public void updateVisitInfo(Customer customer, String address, String addressDetail, BigDecimal lat,
-                                BigDecimal lng, String accessNote) {
+                                BigDecimal lng, String accessNote, VisitInfoSource source) {
         if (this.customer == null || !this.customer.getPhone().equals(customer.getPhone())) {
             this.phoneVerifiedAt = null;
         }
@@ -162,6 +193,7 @@ public class Inquiry extends BaseTimeEntity {
         this.lat = lat;
         this.lng = lng;
         this.accessNote = accessNote;
+        this.visitInfoSource = source;
     }
 
     public void changeWorkType(OwnerWorkType workType) {
