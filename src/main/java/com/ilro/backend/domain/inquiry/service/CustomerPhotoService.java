@@ -18,12 +18,12 @@ import com.ilro.backend.infra.storage.PhotoStorage;
 import com.ilro.backend.infra.storage.PhotoStorage.PresignedUpload;
 import com.ilro.backend.infra.storage.PhotoStorage.PresignedView;
 import com.ilro.backend.infra.storage.PhotoStorage.StoredFile;
+import java.time.Clock;
 import java.time.Duration;
-import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -38,20 +38,22 @@ public class CustomerPhotoService {
     static final long MAX_BYTES = 10_000_000L;
     static final int MAX_PER_INQUIRY = 10;
     private static final Map<String, String> EXTENSIONS = Map.of("image/jpeg", "jpg", "image/png", "png");
-    private static final Set<PhotoUploadStatus> COUNTED = EnumSet.of(PhotoUploadStatus.UPLOADING, PhotoUploadStatus.DONE);
 
     private final InquiryAccess inquiryAccess;
     private final PhotoRepository photoRepository;
     private final PhotoStorage storage;
+    private final Clock clock;
     private final Duration uploadTtl;
     private final Duration viewTtl;
 
     public CustomerPhotoService(InquiryAccess inquiryAccess, PhotoRepository photoRepository, PhotoStorage storage,
+                                Clock clock,
                                 @Value("${app.photo.upload-ttl}") Duration uploadTtl,
                                 @Value("${app.photo.view-ttl}") Duration viewTtl) {
         this.inquiryAccess = inquiryAccess;
         this.photoRepository = photoRepository;
         this.storage = storage;
+        this.clock = clock;
         this.uploadTtl = uploadTtl;
         this.viewTtl = viewTtl;
     }
@@ -71,7 +73,10 @@ public class CustomerPhotoService {
         if (request.sizeBytes() > MAX_BYTES) {
             throw new BusinessException(PhotoErrorCode.PHOTO_TOO_LARGE);
         }
-        if (photoRepository.countByInquiryIdAndUploadStatusIn(inquiryId, COUNTED) >= MAX_PER_INQUIRY) {
+        // 업로드 주소가 만료된 채 남은 UPLOADING은 버려진 업로드라 세지 않음 (올리다 그만둬도 자리가 풀림)
+        long active = photoRepository.countActive(inquiryId, clock.instant().minus(uploadTtl),
+                PhotoUploadStatus.DONE, PhotoUploadStatus.UPLOADING);
+        if (active >= MAX_PER_INQUIRY) {
             throw new BusinessException(PhotoErrorCode.PHOTO_LIMIT_EXCEEDED);
         }
 
@@ -92,12 +97,20 @@ public class CustomerPhotoService {
         inquiryAccess.find(principal, inquiryId);
         Photo photo = findPhoto(inquiryId, photoId);
         if (photo.getUploadStatus() == PhotoUploadStatus.UPLOADING) {
-            StoredFile file = storage.find(photo.getS3KeyOriginal())
-                    .orElseThrow(() -> new BusinessException(PhotoErrorCode.PHOTO_NOT_UPLOADED));
-            if (file.sizeBytes() == photo.getSizeBytes() && photo.getMimeType().equalsIgnoreCase(file.contentType())) {
-                photo.markDone();
-            } else {
+            Optional<StoredFile> file = storage.find(photo.getS3KeyOriginal());
+            if (file.isPresent()) {
+                if (file.get().sizeBytes() == photo.getSizeBytes()
+                        && photo.getMimeType().equalsIgnoreCase(file.get().contentType())) {
+                    photo.markDone();
+                } else {
+                    photo.markFailed();
+                }
+            } else if (isUploadExpired(photo)) {
+                // 업로드 주소가 만료됐는데 파일이 없음 - 더 기다려도 안 올라오므로 처음부터 다시
                 photo.markFailed();
+            } else {
+                // 아직 올리는 중일 수 있음 - 상태는 그대로, 업로드가 끝나면 다시 부르면 됨
+                throw new BusinessException(PhotoErrorCode.PHOTO_NOT_UPLOADED);
             }
         }
         return new PhotoStatusResponse(photo.getId(), photo.getUploadStatus());
@@ -126,5 +139,10 @@ public class CustomerPhotoService {
         return photoRepository.findByInquiryIdAndIdIn(inquiryId, List.of(photoId)).stream()
                 .findFirst()
                 .orElseThrow(() -> new BusinessException(PhotoErrorCode.PHOTO_NOT_FOUND));
+    }
+
+    // 업로드 시작 후 업로드 주소 유효시간이 지났는지
+    private boolean isUploadExpired(Photo photo) {
+        return !photo.getCreatedAt().plus(uploadTtl).isAfter(clock.instant());
     }
 }

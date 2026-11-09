@@ -34,7 +34,7 @@ class PhotoUploadFlowTest {
 
     private static final String ALL_CONSENTS = """
             {"consents":[{"type":"PRIVACY_REQUIRED","termsVersion":"2026-10-v1"},
-                         {"type":"PHOTO","termsVersion":"2026-10-v1"}]}""";
+                                                  {"type":"PHOTO","termsVersion":"2026-10-v1"}]}""";
     private static final String PRIVACY_ONLY = """
             {"consents":[{"type":"PRIVACY_REQUIRED","termsVersion":"2026-10-v1"}]}""";
     private static final long SIZE = 3_000_000L;
@@ -158,6 +158,26 @@ class PhotoUploadFlowTest {
     }
 
     @Test
+    @DisplayName("버려진 업로드 - 업로드 주소가 만료되면 10장에서 빠지고, 완료 확인은 FAILED")
+    void abandonedUpload() throws Exception {
+        Session s = start(ALL_CONSENTS);
+        long abandoned = startUpload(s, "image/jpeg", SIZE);
+        for (int i = 0; i < 9; i++) {
+            startUpload(s, "image/jpeg", SIZE);
+        }
+        upload(s, "image/jpeg", SIZE).andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PHOTO_LIMIT_EXCEEDED"));
+
+        // 고객이 올리다 그만둠 - 업로드 주소 유효시간(5분)이 지난 것으로 만듦
+        expireUpload(abandoned);
+        // 화면이 아무것도 안 해도 자리가 풀림
+        upload(s, "image/jpeg", SIZE).andExpect(status().isCreated());
+        // 나중에 완료 확인을 부르면 기다리라는 409 대신 FAILED
+        complete(s, abandoned).andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.uploadStatus").value("FAILED"));
+    }
+
+    @Test
     @DisplayName("다른 문의 사진은 완료·보기 모두 404 - 있다는 사실도 숨김, 토큰 없으면 401")
     void otherInquiryPhoto() throws Exception {
         Session mine = start(ALL_CONSENTS);
@@ -241,6 +261,11 @@ class PhotoUploadFlowTest {
 
     private String photoStatus(long photoId) {
         return jdbc.queryForObject("SELECT upload_status FROM photo WHERE id = ?", String.class, photoId);
+    }
+
+    // 업로드를 시작한 지 10분 지난 것으로 - 업로드 주소(5분)가 만료된 상태
+    private void expireUpload(long photoId) {
+        jdbc.update("UPDATE photo SET created_at = created_at - interval '10 minutes' WHERE id = ?", photoId);
     }
 
     private static String uploadBody(String contentType, long sizeBytes) {
