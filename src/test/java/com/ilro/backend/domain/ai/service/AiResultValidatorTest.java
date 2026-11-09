@@ -41,7 +41,7 @@ class AiResultValidatorTest {
             List.of(new AnalyzeRequest.MessageItem(CUSTOMER_MSG, MessageSender.CUSTOMER, "물이 새요",
                             OffsetDateTime.now()),
                     new AnalyzeRequest.MessageItem(AI_MSG, MessageSender.AI, "확인할게요", OffsetDateTime.now())),
-            List.of(), false);
+            List.of(), false, List.of());
 
     @Test
     @DisplayName("요청에 맞는 결과 - 이번 고객 메시지·기존 항목의 근거를 쓴 사실은 통과")
@@ -121,6 +121,31 @@ class AiResultValidatorTest {
                 new Fact("symptom", "A", "CUSTOMER", "CONFIRMED", null, null))))).isPresent();
     }
 
+    @Test
+    @DisplayName("사진 완료 ID는 이번 요청의 미처리 사진만 한 번씩 허용")
+    void analyzedPhotosMustBePending() {
+        long pending = 50L;
+        AnalyzeRequest request = new AnalyzeRequest(REQUEST.requestId(), REQUEST.inquiryId(), REQUEST.ownerId(),
+                REQUEST.inputVersion(), REQUEST.handlerMode(), REQUEST.business(), REQUEST.fields(), REQUEST.askCounts(),
+                REQUEST.messages(), List.of(new AnalyzeRequest.PhotoItem(pending, CUSTOMER_MSG, "https://example.test/a"),
+                        new AnalyzeRequest.PhotoItem(OLD_PHOTO, CUSTOMER_MSG, "https://example.test/b")),
+                REQUEST.safetyFlag(), List.of(OLD_PHOTO));
+        AnalyzeResult r = result(List.of());
+        assertThat(AiResultValidator.violation(request, withAnalyzedPhotos(r, List.of(pending)))).isEmpty();
+        assertThat(AiResultValidator.violation(request, withAnalyzedPhotos(r, List.of(pending, pending))))
+                .hasValue("analyzedPhotoIds");
+        assertThat(AiResultValidator.violation(request, withAnalyzedPhotos(r, List.of(OLD_PHOTO))))
+                .hasValue("analyzedPhotoIds");
+        assertThat(AiResultValidator.violation(request, withAnalyzedPhotos(r, List.of(999L))))
+                .hasValue("analyzedPhotoIds");
+    }
+
+    private static AnalyzeResult withAnalyzedPhotos(AnalyzeResult r, List<Long> photoIds) {
+        return new AnalyzeResult(r.requestId(), r.inquiryId(), r.inputVersion(), r.ruleVersion(), r.promptVersion(),
+                r.decidedBy(), r.modelName(), r.usage(), r.facts(), r.conflicts(), r.interpretations(),
+                r.workCategory(), r.safety(), r.intent(), r.nextAction(), r.reply(), r.confidence(), photoIds);
+    }
+
     private static Optional<String> factViolation(Fact fact) {
         return AiResultValidator.violation(REQUEST, result(List.of(fact)));
     }
@@ -139,13 +164,13 @@ class AiResultValidatorTest {
                 List.of(), List.of(), new AnalyzeResult.WorkCategoryDecision("REPAIR", "CONFIRMED"),
                 new AnalyzeResult.Safety(false, List.of()), "ANSWER",
                 new AnalyzeResult.NextAction("COMPLETE", "DONE", List.of(), "ok"), new AnalyzeResult.Reply("확인"),
-                new BigDecimal("0.9"));
+                new BigDecimal("0.9"), List.of());
     }
 
     private static AnalyzeResult copy(AnalyzeResult r, String requestId, Long inquiryId, Long inputVersion) {
         return new AnalyzeResult(requestId, inquiryId, inputVersion, r.ruleVersion(), r.promptVersion(),
                 r.decidedBy(), r.modelName(), r.usage(), r.facts(), r.conflicts(), r.interpretations(),
-                r.workCategory(), r.safety(), r.intent(), r.nextAction(), r.reply(), r.confidence());
+                r.workCategory(), r.safety(), r.intent(), r.nextAction(), r.reply(), r.confidence(), r.analyzedPhotoIds());
     }
 
     private static AnalyzeResult with(AnalyzeResult r, String action, String ruleReason, String decidedBy,
@@ -154,6 +179,6 @@ class AiResultValidatorTest {
         return new AnalyzeResult(r.requestId(), r.inquiryId(), r.inputVersion(), r.ruleVersion(), r.promptVersion(),
                 decidedBy, r.modelName(), r.usage(), r.facts(), r.conflicts(), r.interpretations(), category,
                 r.safety(), r.intent(), new AnalyzeResult.NextAction(action, ruleReason, List.of(), "ok"),
-                new AnalyzeResult.Reply(reply), confidence);
+                new AnalyzeResult.Reply(reply), confidence, r.analyzedPhotoIds());
     }
 }

@@ -81,7 +81,7 @@ public class FakeAiAnalyzeClient implements AiAnalyzeClient {
                 "fake", "fake", "RULE", "fake", new AnalyzeResult.Usage(0, 0, 0), facts, List.of(), List.of(),
                 new AnalyzeResult.WorkCategoryDecision(null, "UNCONFIRMED"),
                 new AnalyzeResult.Safety(safety, safety ? List.of("FAKE") : List.of()), "ANSWER", next,
-                new AnalyzeResult.Reply("[가짜 응답] " + reply), null);
+                new AnalyzeResult.Reply("[가짜 응답] " + reply), null, List.of());
         return AiCallResult.success(result,
                 jsonMapper.writeValueAsString(new Envelope(true, "OK", "요청 성공", result)), 0);
     }

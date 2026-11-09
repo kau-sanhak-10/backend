@@ -38,6 +38,7 @@ import com.ilro.backend.infra.storage.LocalPhotoStorage;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -213,6 +214,46 @@ class AiAnalysisFlowTest {
         assertThat(((Number) JsonPath.read(snapshot, "$.photos[0].photoId")).longValue()).isEqualTo(attached);
         assertThat((Object) JsonPath.read(snapshot, "$.photos[0].imageUrl")).isNull();
         assertThat(snapshot).doesNotContain("local-photo-storage");
+    }
+
+    @Test
+    @DisplayName("적용된 사진만 다음 턴에서 재분석 제외, 미완료·새 사진 및 사장님 화면의 근거는 유지")
+    void skipsOnlyAppliedPhotosOnNextTurn() throws Exception {
+        Session session = startInquiry();
+        long completed = uploadedPhoto(session);
+        long pending = uploadedPhoto(session);
+        long photoMessage = sendWithPhoto(session, "", completed);
+        sendWithPhoto(session, "", pending);
+        AiAnalysisStore.Snapshot stale = store.prepare(session.inquiryId()).orElseThrow();
+        send(session, "사진을 먼저 확인해 주세요");
+        assertThat(store.apply(stale, ok(answer("ASK_MORE_INFO", "MISSING_FIELD").analyzed(pending)
+                .build(stale.request())))).isEqualTo(AiAnalysisStore.State.NEW_INPUT);
+
+        ai.then(reply(answer("ASK_MORE_INFO", "MISSING_FIELD").targets("symptom")
+                .fact(new Fact("model", "NCB-500", "PHOTO", "CONFIRMED", null, new Evidence(null, completed)))
+                .analyzed(completed)));
+        analysisService.analyze(session.inquiryId());
+        assertThat(ai.requests().getFirst().processedPhotoIds()).isEmpty();
+
+        long newPhoto = uploadedPhoto(session);
+        sendWithPhoto(session, "", newPhoto);
+        ai.then(reply(answer("ASK_MORE_INFO", "MISSING_FIELD").targets("symptom").analyzed(pending, newPhoto)));
+        analysisService.analyze(session.inquiryId());
+
+        AnalyzeRequest next = ai.requests().getLast();
+        assertThat(next.processedPhotoIds()).containsExactly(completed);
+        assertThat(next.photos()).extracting(AnalyzeRequest.PhotoItem::photoId)
+                .containsExactly(completed, pending, newPhoto);
+        assertThat(next.messages()).anySatisfy(message -> {
+            assertThat(message.messageId()).isEqualTo(photoMessage);
+            assertThat(message.content()).isEmpty();
+        });
+        assertThat(decisionStatuses(session)).containsExactly("STALE", "SUCCESS", "SUCCESS");
+        getAs(accounts.ownerToken(ownerId), "/api/v1/owner/inquiries/" + session.inquiryId())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.fields[1].value").value("NCB-500"))
+                .andExpect(jsonPath("$.result.fields[1].source").value("PHOTO"))
+                .andExpect(jsonPath("$.result.photos[0].photoId").value(completed));
     }
 
 
@@ -690,6 +731,7 @@ class AiAnalysisFlowTest {
         private final List<Fact> facts = new ArrayList<>();
         private final List<AnalyzeResult.Conflict> conflicts = new ArrayList<>();
         private List<String> targets = List.of();
+        private List<Long> analyzed = List.of();
         private String category;
         private boolean safety;
         private String decidedBy = "EXTERNAL_API";
@@ -710,6 +752,11 @@ class AiAnalysisFlowTest {
 
         Answer fact(Fact fact) {
             facts.add(fact);
+            return this;
+        }
+
+        Answer analyzed(Long... photoIds) {
+            analyzed = List.of(photoIds);
             return this;
         }
 
@@ -741,7 +788,7 @@ class AiAnalysisFlowTest {
                     new AnalyzeResult.WorkCategoryDecision(category, category == null ? "UNCONFIRMED" : "CONFIRMED"),
                     new AnalyzeResult.Safety(safety, safety ? List.of("GAS_SMELL") : List.of()), "ANSWER",
                     new AnalyzeResult.NextAction(action, ruleReason, targets, "test"),
-                    new AnalyzeResult.Reply("확인했어요."), new BigDecimal("0.876"));
+                    new AnalyzeResult.Reply("확인했어요."), new BigDecimal("0.876"), analyzed);
         }
     }
 
@@ -803,8 +850,12 @@ class AiAnalysisFlowTest {
     }
 
     private long sendWithPhoto(Session session, String content, long photoId) throws Exception {
-        String body = postAs(session.token(), session.path("/messages"), "{\"clientMsgId\":\"" + UUID.randomUUID()
-                + "\",\"content\":\"" + content + "\",\"photoIds\":[" + photoId + "]}")
+        Map<String, Object> request = new HashMap<>(Map.of(
+                "clientMsgId", UUID.randomUUID().toString(), "photoIds", List.of(photoId)));
+        if (!content.isEmpty()) {
+            request.put("content", content);
+        }
+        String body = postAs(session.token(), session.path("/messages"), jsonMapper.writeValueAsString(request))
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
         return ((Number) JsonPath.read(body, "$.result.messageId")).longValue();

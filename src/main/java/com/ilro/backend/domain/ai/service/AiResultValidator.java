@@ -40,6 +40,16 @@ final class AiResultValidator {
         if (!isOneOf(result.decidedBy(), DecidedBy.class)) {
             return Optional.of("decidedBy");
         }
+        if (result.analyzedPhotoIds() != null && !result.analyzedPhotoIds().isEmpty()) {
+            Set<Long> pending = request.photos().stream().map(AnalyzeRequest.PhotoItem::photoId)
+                    .collect(Collectors.toCollection(HashSet::new));
+            pending.removeAll(request.processedPhotoIds());
+            for (Long photoId : result.analyzedPhotoIds()) {
+                if (!pending.remove(photoId)) {
+                    return Optional.of("analyzedPhotoIds");
+                }
+            }
+        }
         AnalyzeResult.NextAction next = result.nextAction();
         if (next == null || !isOneOf(next.action(), AiAction.class)
                 || (next.ruleReason() != null && !isOneOf(next.ruleReason(), RuleReason.class))) {
