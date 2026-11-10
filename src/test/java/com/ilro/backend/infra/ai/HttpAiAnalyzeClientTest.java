@@ -253,6 +253,6 @@ class HttpAiAnalyzeClientTest {
                 new AnalyzeRequest.Business(List.of(WorkCategory.LEAK), false), List.of(), Map.of(),
                 List.of(new AnalyzeRequest.MessageItem(11L, MessageSender.CUSTOMER, "물이 새요",
                         OffsetDateTime.of(2026, 11, 3, 10, 0, 0, 0, ZoneOffset.ofHours(9)))),
-                List.of(), false);
+                List.of(), false, List.of());
     }
 }

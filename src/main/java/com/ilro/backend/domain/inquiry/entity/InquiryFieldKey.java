@@ -18,7 +18,8 @@ public enum InquiryFieldKey {
     MODEL("model", 100, false),
     BOILER_TYPE("boiler_type", 50, false),
     ERROR_CODE("error_code", 20, false),
-    SYMPTOM("symptom", 255, true);
+    SYMPTOM("symptom", 255, true),
+    CONTROLLER_MODEL("controller_model", 100, false);
 
     private final String key;
     private final int maxLength;

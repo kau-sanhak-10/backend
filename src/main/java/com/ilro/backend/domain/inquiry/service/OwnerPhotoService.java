@@ -12,13 +12,11 @@ import com.ilro.backend.global.exception.BusinessException;
 import com.ilro.backend.infra.storage.PhotoStorage;
 import com.ilro.backend.infra.storage.PhotoStorage.PresignedView;
 import java.time.Duration;
-import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-// 사장님 사진 보기 (B-13, BE-06) - 자기 업체 문의의 업로드를 마친 사진만, 짧게 만료되는 주소
-// 다른 업체 문의는 404 INQUIRY_NOT_FOUND, 그 문의에 없거나 아직 안 올라온 사진은 404 PHOTO_NOT_FOUND
+// 사장님 사진 보기 (B-13, BE-06) - 자기 업체 문의에서 고객이 보낸 사진만, 짧게 만료되는 주소
 @Service
 public class OwnerPhotoService {
 
@@ -38,8 +36,9 @@ public class OwnerPhotoService {
     @Transactional(readOnly = true)
     public PhotoUrl viewUrl(AuthPrincipal principal, Long inquiryId, Long photoId) {
         inquiryAccess.findOwned(principal, inquiryId);
-        Photo photo = photoRepository.findByInquiryIdAndIdIn(inquiryId, List.of(photoId)).stream()
-                .filter(found -> found.getUploadStatus() == PhotoUploadStatus.DONE)
+        Photo photo = photoRepository.findByInquiryIdAndUploadStatusAndMessageIsNotNullOrderByIdAsc(
+                        inquiryId, PhotoUploadStatus.DONE).stream()
+                .filter(found -> found.getId().equals(photoId))
                 .findFirst()
                 .orElseThrow(() -> new BusinessException(PhotoErrorCode.PHOTO_NOT_FOUND));
 

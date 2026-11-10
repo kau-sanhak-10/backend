@@ -18,7 +18,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 // AI 분석 대기열 - 고객 메시지가 커밋되면 따로 스레드에서 분석 (고객 화면은 기다리지 않음, 명세 6.1)
-// 문의마다 한 번에 한 작업만: 도는 동안 들어온 요청은 끝난 뒤 한 번 더 돌게 표시 (최신 입력으로)
+// 문의마다 한 번에 한 작업만. 새 고객 문장이 오면 이전 사진 응답 대기를 끊고 최신 입력을 처리할 수 있다.
 // 서버 한 대 기준 - 여러 대로 늘리면 문의별 잠금을 DB로 옮겨야 함
 @Slf4j
 @Component
@@ -34,8 +34,12 @@ public class AiAnalysisQueue {
     private final TaskExecutor executor;
     private final Clock clock;
     private final boolean enabled;
-    // 문의 ID → 도는 동안 다시 요청이 왔는지
-    private final Map<Long, Boolean> running = new HashMap<>();
+    private final Map<Long, Work> running = new HashMap<>();
+
+    private static final class Work {
+        boolean again;
+        volatile long latestTextMessageId;
+    }
 
     public AiAnalysisQueue(AiAnalysisService analysisService, InquiryRepository inquiryRepository,
                            @Qualifier("aiAnalysisExecutor") TaskExecutor executor, Clock clock,
@@ -49,22 +53,31 @@ public class AiAnalysisQueue {
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void on(AiAnalysisRequested event) {
-        request(event.inquiryId());
+        request(event.inquiryId(), event.customerTextMessageId());
     }
 
     public void request(Long inquiryId) {
+        request(inquiryId, 0);
+    }
+
+    private void request(Long inquiryId, long textMessageId) {
         if (!enabled) {
             return;
         }
+        Work work;
         synchronized (running) {
-            if (running.containsKey(inquiryId)) {
-                running.put(inquiryId, true);
+            Work current = running.get(inquiryId);
+            if (current != null) {
+                current.again = true;
+                current.latestTextMessageId = Math.max(current.latestTextMessageId, textMessageId);
                 return;
             }
-            running.put(inquiryId, false);
+            work = new Work();
+            work.latestTextMessageId = textMessageId;
+            running.put(inquiryId, work);
         }
         try {
-            executor.execute(() -> runLoop(inquiryId));
+            executor.execute(() -> runLoop(inquiryId, work));
         } catch (TaskRejectedException e) {
             synchronized (running) {
                 running.remove(inquiryId);
@@ -84,17 +97,17 @@ public class AiAnalysisQueue {
                 .forEach(this::request);
     }
 
-    private void runLoop(Long inquiryId) {
+    private void runLoop(Long inquiryId, Work work) {
         boolean again = true;
         try {
             while (again) {
                 try {
-                    analysisService.analyze(inquiryId);
+                    analysisService.analyze(inquiryId, () -> work.latestTextMessageId);
                 } catch (RuntimeException e) {
                     // 답이 없는 메시지는 sweep이 다시 잡음
                     log.error("AI 분석 작업 실패 inquiryId={}", inquiryId, e);
                 }
-                again = finishRound(inquiryId);
+                again = finishRound(inquiryId, work);
             }
         } finally {
             // Error(메모리 부족 등)로 빠져나가도 표시를 지움 - 남으면 이 문의는 재시작 전까지 다시 분석되지 않음
@@ -107,10 +120,10 @@ public class AiAnalysisQueue {
     }
 
     // 이번 회차를 끝냄 - 도는 동안 요청이 또 왔으면 한 번 더(true), 아니면 표시를 지움
-    private boolean finishRound(Long inquiryId) {
+    private boolean finishRound(Long inquiryId, Work work) {
         synchronized (running) {
-            if (Boolean.TRUE.equals(running.get(inquiryId))) {
-                running.put(inquiryId, false);
+            if (work.again) {
+                work.again = false;
                 return true;
             }
             running.remove(inquiryId);

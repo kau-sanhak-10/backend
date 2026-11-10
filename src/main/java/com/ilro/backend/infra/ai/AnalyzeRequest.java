@@ -1,5 +1,6 @@
 package com.ilro.backend.infra.ai;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.ilro.backend.domain.inquiry.entity.HandlerMode;
 import com.ilro.backend.domain.inquiry.entity.InquiryFieldSource;
 import com.ilro.backend.domain.inquiry.entity.InquiryFieldStatus;
@@ -16,14 +17,15 @@ import java.util.Map;
 public record AnalyzeRequest(String requestId, Long inquiryId, Long ownerId, long inputVersion,
                              HandlerMode handlerMode, Business business, List<Field> fields,
                              Map<String, Integer> askCounts, List<MessageItem> messages, List<PhotoItem> photos,
-                             boolean safetyFlag) {
+                             boolean safetyFlag,
+                             @JsonInclude(JsonInclude.Include.NON_EMPTY) List<Long> processedPhotoIds) {
 
     // DB 기록(input_snapshot)용 - 사진 주소에는 임시 자격 증명이 들어 있어 비우고 사진·메시지 번호만 남김
     public AnalyzeRequest withoutImageUrls() {
         return new AnalyzeRequest(requestId, inquiryId, ownerId, inputVersion, handlerMode, business, fields,
                 askCounts, messages,
                 photos.stream().map(photo -> new PhotoItem(photo.photoId(), photo.messageId(), null)).toList(),
-                safetyFlag);
+                safetyFlag, processedPhotoIds);
     }
 
     public record Business(List<WorkCategory> activeWorkCategories, boolean autoBookingEnabled) {

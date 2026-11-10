@@ -133,15 +133,18 @@ public class AiAnalysisStore {
         List<AiDecision> failures = decisionRepository
                 .findByInquiryIdAndInputVersionAndStatusInOrderByIdAsc(inquiryId, inputVersion, FAILURES);
         String requestId = failures.isEmpty() ? UUID.randomUUID().toString() : failures.getFirst().getRequestId();
-        // 사진 주소(리사이즈본의 짧은 유효기간 주소)는 사진 업로드(BE-06)가 생기면 함께 보냄
-        // 사진은 이번에 보내는 메시지에 붙은 것만, 원본 임시 주소로 (BE-06)
-        // 부를 때마다 새로 만들므로 재요청해도 만료된 주소를 보내지 않음
+        // 최근 대화에 붙은 사진을 보내되, 같은 문의의 적용된 성공 결과에 있는 사진은 분석에서 제외한다.
+        // 사진만 보낸 메시지의 근거를 위해 완료된 사진도 사진 목록에 유지한다.
         List<AnalyzeRequest.MessageItem> messages = messages(inquiryId);
         List<AnalyzeRequest.PhotoItem> photos = aiPhotoUrls.of(
                 messages.stream().map(AnalyzeRequest.MessageItem::messageId).toList());
+        Set<String> completedPhotos = photos.isEmpty() ? Set.of()
+                : Set.copyOf(decisionRepository.findAnalyzedPhotoIds(inquiryId));
+        List<Long> processedPhotoIds = photos.stream().map(AnalyzeRequest.PhotoItem::photoId)
+                .filter(id -> completedPhotos.contains(id.toString())).toList();
         AnalyzeRequest request = new AnalyzeRequest(requestId, inquiryId, inquiry.getOwner().getId(), inputVersion,
                 HandlerMode.AI, business(inquiry.getOwner()), fields(inquiryId), askCounts(inquiryId),
-                messages, photos, inquiry.isSafetyFlag());
+                messages, photos, inquiry.isSafetyFlag(), processedPhotoIds);
         // DB 기록에는 사진 주소를 빼고 남김 (임시 자격 증명 포함)
         return Optional.of(new Snapshot(request, jsonMapper.writeValueAsString(request.withoutImageUrls()),
                 lastCustomer.getId(), failures.size()));
@@ -183,13 +186,14 @@ public class AiAnalysisStore {
         return State.DONE;
     }
 
-    // 실패한 호출 기록 - 허위 판단값 없이 (모델명·할 일 비움, 명세 6.4)
+    // 실패·중단된 호출 기록 - 허위 판단값 없이 (모델명·할 일 비움, 명세 6.4)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public State recordFailure(Snapshot snapshot, AiCallResult call) {
         Inquiry inquiry = inquiryRepository.findById(snapshot.inquiryId()).orElseThrow();
         AiDecisionStatus status = switch (call.outcome()) {
             case TIMEOUT -> AiDecisionStatus.TIMEOUT;
             case INVALID_OUTPUT -> AiDecisionStatus.INVALID_OUTPUT;
+            case SUPERSEDED -> AiDecisionStatus.STALE;
             default -> AiDecisionStatus.FAILED;
         };
         decisionRepository.save(AiDecision.builder()

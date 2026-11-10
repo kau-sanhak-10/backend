@@ -13,7 +13,7 @@ public record AnalyzeResult(String requestId, Long inquiryId, Long inputVersion,
                             List<Fact> facts, List<Conflict> conflicts,
                             List<Map<String, Object>> interpretations, WorkCategoryDecision workCategory,
                             Safety safety, String intent, NextAction nextAction, Reply reply,
-                            BigDecimal confidence) {
+                            BigDecimal confidence, List<Long> analyzedPhotoIds) {
 
     public record Usage(Integer latencyMs, Integer inputTokens, Integer outputTokens) {
     }

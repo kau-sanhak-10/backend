@@ -5,12 +5,26 @@ import com.ilro.backend.domain.ai.entity.AiDecision;
 import com.ilro.backend.domain.ai.entity.AiDecisionStatus;
 import com.ilro.backend.domain.ai.entity.AiStage;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
 
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
 public interface AiDecisionRepository extends JpaRepository<AiDecision, Long> {
+
+    // 이미 저장하는 성공 응답에서 사진 완료 ID만 읽는다. 실패·STALE 결과는 분석 이력이 아니다.
+    @Query(value = """
+            SELECT DISTINCT CAST(photo.id AS text)
+            FROM ai_decision d
+            CROSS JOIN LATERAL jsonb_array_elements(
+                CASE WHEN jsonb_typeof(d.output_raw #> '{result,analyzedPhotoIds}') = 'array'
+                    THEN d.output_raw #> '{result,analyzedPhotoIds}' ELSE CAST('[]' AS jsonb) END
+            ) AS photo(id)
+            WHERE d.inquiry_id = :inquiryId AND d.stage = 'DECIDE' AND d.status = 'SUCCESS'
+                AND jsonb_typeof(photo.id) = 'number'
+            """, nativeQuery = true)
+    List<String> findAnalyzedPhotoIds(Long inquiryId);
 
     // 고객 화면 다음 안내 - 적용된 마지막 판단 (실패·오래된 결과는 빼고)
     Optional<AiDecision> findFirstByInquiryIdAndStageAndStatusOrderByIdDesc(Long inquiryId, AiStage stage,
