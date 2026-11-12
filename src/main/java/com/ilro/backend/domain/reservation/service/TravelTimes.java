@@ -1,25 +1,31 @@
 package com.ilro.backend.domain.reservation.service;
 
 import com.ilro.backend.infra.map.GeoPoint;
-import com.ilro.backend.infra.map.MapClient;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalInt;
 
-// 자동차 이동시간 - 한 요청 안에서 같은 구간은 지도에 다시 묻지 않음 (요청을 넘는 캐시는 BE-10)
-// 실패도 기억함 - 같은 구간을 후보마다 다시 물어 지도 호출 한도를 쓰지 않게
+// 한 요청 안의 자동차 이동시간 - 같은 구간은 한 번만 물음 (후보마다 다시 묻지 않게, 실패도 기억)
+// 요청을 넘는 기억·지도 오류 처리는 MapLookup (BE-10) - 요청 도중 그 기억이 만료돼도 이 요청 안에서는 같은 값
 public final class TravelTimes {
 
-    private final MapClient mapClient;
-    private final Map<List<GeoPoint>, OptionalInt> cache = new HashMap<>();
+    // 이동시간(분)을 묻는 곳 - 서비스는 MapLookup, 단위 테스트는 가짜 지도
+    @FunctionalInterface
+    public interface Source {
 
-    public TravelTimes(MapClient mapClient) {
-        this.mapClient = mapClient;
+        OptionalInt minutes(GeoPoint from, GeoPoint to);
+    }
+
+    private final Source source;
+    private final Map<List<GeoPoint>, OptionalInt> asked = new HashMap<>();
+
+    public TravelTimes(Source source) {
+        this.source = source;
     }
 
     public OptionalInt minutes(GeoPoint from, GeoPoint to) {
-        return cache.computeIfAbsent(List.of(from, to), key -> mapClient.carTravelMinutes(from, to));
+        return asked.computeIfAbsent(List.of(from, to), key -> source.minutes(from, to));
     }
 }

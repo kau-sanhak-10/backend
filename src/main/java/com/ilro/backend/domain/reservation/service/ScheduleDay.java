@@ -7,6 +7,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.List;
+import java.util.Objects;
 
 // 업체의 하루 일정 (한국 날짜) - 시간 검사(명세 5.2 3번)에 필요한 값을 한 번 읽어 그날 후보 전체에 씀
 // open·close가 null이면 휴무 (영업시간을 안 정한 요일 포함), 점심은 둘 다 있을 때만
@@ -49,5 +50,11 @@ public record ScheduleDay(LocalDate date, LocalTime open, LocalTime close, Local
         return visits.stream()
                 .filter(visit -> visit.startAt().atZone(KstTime.ZONE).toLocalDate().equals(date))
                 .count();
+    }
+
+    // 바꾸려는 예약을 뺀 하루 - 예약 변경(B-19)에서 자기 예약은 겹침·하루 한도·앞뒤 방문에 넣지 않음 (명세 5.3)
+    public ScheduleDay withoutVisit(Long reservationId) {
+        return new ScheduleDay(date, open, close, lunchStart, lunchEnd, maxDailyVisits, bufferMinutes, origin, blocks,
+                visits.stream().filter(visit -> !Objects.equals(visit.reservationId(), reservationId)).toList());
     }
 }

@@ -10,7 +10,7 @@ import java.util.Comparator;
 import java.util.Optional;
 import java.util.OptionalInt;
 
-// 방문 시각 검사기 (명세 5.2 3번) - 후보 계산(C-12)과 예약 확정(BE-11)이 같은 검사를 씀
+// 방문 시각 검사기 (명세 5.2 3번) - 후보 계산(C-12)·예약 확정(BE-11)·수동 예약(B-18)·변경(B-19)이 같은 검사를 씀
 // 방문 시간 = 시작 + 작업시간, 그 앞뒤로 이동시간 + 여유시간이 따로 들어감 (작업시간에 섞지 않음, BE-09)
 // SlotUnavailableReason 순서대로 보고 처음 걸린 이유 하나를 돌려줌
 public final class SlotChecker {
@@ -18,6 +18,8 @@ public final class SlotChecker {
     private SlotChecker() {
     }
 
+    // destination: 방문 주소 좌표 - 모르면 null (앞뒤 이동을 봐야 하면 이동시간 모름, BE-10)
+    // 바꾸려는 예약은 부르는 쪽이 day에서 뺌 (ScheduleDay.withoutVisit)
     public static SlotCheck check(ScheduleDay day, Instant start, int workMinutes, GeoPoint destination,
                                   Instant now, TravelTimes travel) {
         Instant end = start.plus(Duration.ofMinutes(workMinutes));
@@ -63,7 +65,7 @@ public final class SlotChecker {
             return SlotCheck.unknownTravel();
         }
         if (from != null) {
-            OptionalInt minutes = travel.minutes(from, destination);
+            OptionalInt minutes = destination == null ? OptionalInt.empty() : travel.minutes(from, destination);
             if (minutes.isEmpty()) {
                 return SlotCheck.unknownTravel();
             }
@@ -76,7 +78,8 @@ public final class SlotChecker {
         }
         if (next.isPresent()) {
             GeoPoint to = next.get().location();
-            OptionalInt minutes = to == null ? OptionalInt.empty() : travel.minutes(destination, to);
+            OptionalInt minutes = to == null || destination == null
+                    ? OptionalInt.empty() : travel.minutes(destination, to);
             if (minutes.isEmpty()) {
                 return SlotCheck.unknownTravel();
             }

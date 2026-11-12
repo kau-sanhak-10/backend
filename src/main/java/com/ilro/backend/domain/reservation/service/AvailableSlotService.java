@@ -13,7 +13,6 @@ import com.ilro.backend.global.auth.AuthPrincipal;
 import com.ilro.backend.global.common.util.KstTime;
 import com.ilro.backend.global.exception.BusinessException;
 import com.ilro.backend.infra.map.GeoPoint;
-import com.ilro.backend.infra.map.MapClient;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,7 +31,7 @@ import java.util.Optional;
 
 // 방문 가능 시간 (C-12, 명세 5.2, BE-09) - 화면에서 고른 시간은 잡아 둔 것이 아니며 확정(BE-11) 때 같은 검사를 다시 함
 // 후보: 영업 시작부터 slot-step 간격으로 '시작 + 작업시간'이 영업 종료 안에 드는 시각
-// 업체·문의 조건(1·2번)이나 이동시간 계산이 막히면 후보 대신 422, 문의는 사장님 확인으로
+// 업체·문의 조건(1·2번)이나 이동시간 계산이 막히면(지도 오류 포함, BE-10) 후보 대신 422, 문의는 사장님 확인으로
 @Service
 public class AvailableSlotService {
 
@@ -41,20 +40,20 @@ public class AvailableSlotService {
     private final BookingEligibility eligibility;
     private final BookingEscalation escalation;
     private final OwnerScheduleReader scheduleReader;
-    private final MapClient mapClient;
+    private final MapLookup mapLookup;
     private final Clock clock;
     private final Duration slotStep;
 
     public AvailableSlotService(InquiryAccess inquiryAccess, ReservationRepository reservationRepository,
                                 BookingEligibility eligibility, BookingEscalation escalation,
-                                OwnerScheduleReader scheduleReader, MapClient mapClient, Clock clock,
+                                OwnerScheduleReader scheduleReader, MapLookup mapLookup, Clock clock,
                                 @Value("${app.booking.slot-step}") Duration slotStep) {
         this.inquiryAccess = inquiryAccess;
         this.reservationRepository = reservationRepository;
         this.eligibility = eligibility;
         this.escalation = escalation;
         this.scheduleReader = scheduleReader;
-        this.mapClient = mapClient;
+        this.mapLookup = mapLookup;
         this.clock = clock;
         this.slotStep = slotStep;
     }
@@ -83,7 +82,7 @@ public class AvailableSlotService {
         LocalDate start = from != null ? from : LocalDate.now(clock.withZone(KstTime.ZONE));
         int workMinutes = inquiry.getWorkType().getDurationMinutes();
         GeoPoint destination = BookingEligibility.destination(inquiry).orElseThrow();
-        TravelTimes travel = new TravelTimes(mapClient);
+        TravelTimes travel = mapLookup.newRequest();
 
         List<Day> result = new ArrayList<>();
         for (ScheduleDay day : scheduleReader.read(inquiry.getOwner(), start, start.plusDays(days)).values()) {

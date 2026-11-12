@@ -149,11 +149,46 @@ class SlotCheckerTest {
         assertThat(first.isAvailable()).isTrue();
         assertThat(first.travelMinutes()).isNull();
 
-        TravelTimes travel = new TravelTimes(map);
+        TravelTimes travel = new TravelTimes(map::carTravelMinutes);
         ScheduleDay withOrigin = day(null, ORIGIN, List.of(), List.of());
         SlotChecker.check(withOrigin, at(10, 0), 60, CUSTOMER, NOW, travel);
         SlotChecker.check(withOrigin, at(14, 0), 60, CUSTOMER, NOW, travel);
         assertThat(asked).containsExactly(List.of(ORIGIN, CUSTOMER));
+    }
+
+    @Test
+    @DisplayName("예약 변경 - 바꾸려는 자기 예약은 겹침·하루 한도·앞뒤 방문에서 빼고 검사, 다른 예약은 그대로 (B-19)")
+    void excludingOwnReservation() {
+        minutes.put(List.of(ORIGIN, CUSTOMER), OptionalInt.of(0));
+        // 하루 한도 2건이 다 찬 날, 10~11시 자기 예약(7번)을 10:30으로 옮김
+        ScheduleDay day = day(2, ORIGIN, List.of(),
+                List.of(visit(7L, 10, 0, 11, 0, CUSTOMER), visit(8L, 15, 0, 16, 0, OTHER)));
+        assertThat(check(day, 10, 30).reason()).isEqualTo(SlotUnavailableReason.DAILY_LIMIT_REACHED);
+
+        ScheduleDay moving = day.withoutVisit(7L);
+        assertThat(moving.visits()).extracting(Visit::reservationId).containsExactly(8L);
+        assertThat(check(moving, 10, 30).isAvailable()).isTrue();
+        assertThat(check(moving, 15, 30).reason()).isEqualTo(SlotUnavailableReason.OVERLAP);
+        assertThat(check(moving, 13, 30).reason()).as("14:30 + 15 + 20 = 15:05")
+                .isEqualTo(SlotUnavailableReason.TRAVEL_CONFLICT);
+    }
+
+    @Test
+    @DisplayName("방문 주소 좌표를 모르면 앞뒤 이동을 봐야 할 때 이동시간 모름, 셀 곳이 없으면 가능 (지도에 묻지 않음)")
+    void unknownDestination() {
+        TravelTimes travel = new TravelTimes(map::carTravelMinutes);
+        SlotCheck fromOrigin = SlotChecker.check(day(null, ORIGIN, List.of(), List.of()), at(10, 0), 60, null, NOW,
+                travel);
+        assertThat(fromOrigin.travelUnknown()).isTrue();
+
+        SlotCheck beforeNext = SlotChecker.check(day(null, null, List.of(), List.of(visit(14, 0, 15, 0, OTHER))),
+                at(10, 0), 60, null, NOW, travel);
+        assertThat(beforeNext.travelUnknown()).isTrue();
+
+        SlotCheck nothingToCount = SlotChecker.check(day(null, null, List.of(), List.of()), at(10, 0), 60, null, NOW,
+                travel);
+        assertThat(nothingToCount.isAvailable()).isTrue();
+        assertThat(asked).isEmpty();
     }
 
     // 09:00~18:00, 점심 12:00~13:00, 여유시간 15분, 작업 60분
@@ -168,7 +203,7 @@ class SlotCheckerTest {
     }
 
     private SlotCheck check(ScheduleDay day, int hour, int minute, Instant now) {
-        return SlotChecker.check(day, at(hour, minute), 60, CUSTOMER, now, new TravelTimes(map));
+        return SlotChecker.check(day, at(hour, minute), 60, CUSTOMER, now, new TravelTimes(map::carTravelMinutes));
     }
 
     private static Instant at(int hour, int minute) {
@@ -180,7 +215,12 @@ class SlotCheckerTest {
     }
 
     private static Visit visit(int startHour, int startMinute, int endHour, int endMinute, GeoPoint location) {
-        return new Visit(1L, at(startHour, startMinute), at(endHour, endMinute), location);
+        return visit(1L, startHour, startMinute, endHour, endMinute, location);
+    }
+
+    private static Visit visit(long reservationId, int startHour, int startMinute, int endHour, int endMinute,
+                               GeoPoint location) {
+        return new Visit(reservationId, at(startHour, startMinute), at(endHour, endMinute), location);
     }
 
     private static GeoPoint point(String lat, String lng) {

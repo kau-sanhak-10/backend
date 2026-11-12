@@ -11,7 +11,6 @@ import com.ilro.backend.domain.owner.entity.OwnerWorkType;
 import com.ilro.backend.domain.owner.repository.OwnerServiceAreaRepository;
 import com.ilro.backend.domain.reservation.exception.ReservationErrorCode;
 import com.ilro.backend.infra.map.GeoPoint;
-import com.ilro.backend.infra.map.MapClient;
 import com.ilro.backend.infra.map.ServiceAreaMatch;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -35,7 +34,7 @@ public class BookingEligibility {
 
     private final InquiryFieldRepository fieldRepository;
     private final OwnerServiceAreaRepository serviceAreaRepository;
-    private final MapClient mapClient;
+    private final MapLookup mapLookup;
 
     // 막힌 이유 - result는 응답의 result (없으면 null)
     public record Block(ReservationErrorCode code, Object result) {
@@ -65,13 +64,13 @@ public class BookingEligibility {
         if (inquiry.isSafetyFlag()) {
             return block(ReservationErrorCode.SAFETY_CHECK_REQUIRED);
         }
-        // 주소 좌표·서비스 지역 - 좌표가 없거나 지도가 판별하지 못하면 지역 밖과 같이 사장님 확인
+        // 주소 좌표·서비스 지역 - 좌표가 없거나 지도가 판별하지 못하면(지도 오류 포함) 지역 밖과 같이 사장님 확인
         Optional<GeoPoint> destination = destination(inquiry);
         List<String> regionCodes = serviceAreaRepository.findByOwnerIdOrderByIdAsc(owner.getId()).stream()
                 .map(OwnerServiceArea::getRegionCode)
                 .toList();
         if (destination.isEmpty() || regionCodes.isEmpty()
-                || mapClient.matchServiceArea(destination.get(), regionCodes) != ServiceAreaMatch.INSIDE) {
+                || mapLookup.serviceArea(destination.get(), regionCodes) != ServiceAreaMatch.INSIDE) {
             return block(ReservationErrorCode.OUT_OF_SERVICE_AREA);
         }
         return Optional.empty();
