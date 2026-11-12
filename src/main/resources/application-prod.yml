@@ -8,6 +8,10 @@ springdoc:
     enabled: false
 
 logging:
+  structured:
+    format:
+      # 로그 한 줄을 JSON 하나로 - CloudWatch에서 requestId·actor로 검색, 오류 스택도 한 덩어리로
+      console: logstash
   level:
     com.ilro: info
 app:

@@ -49,8 +49,14 @@ PREV_IMAGE=$(docker inspect --format '{{.Config.Image}}' "$NAME" 2>/dev/null || 
 # $1 이미지, $2 env 파일
 start() {
   docker rm -f "$NAME" >/dev/null 2>&1 || true
+  # 로그는 CloudWatch Logs /ilro/<환경>/app으로 (그룹·보존 기간은 콘솔에서 미리 생성)
+  # non-blocking: CloudWatch가 느려도 서버 응답은 안 막힘 (버퍼가 넘치면 그 로그는 버림)
   docker run -d --name "$NAME" --restart unless-stopped -p "$PORT:8080" \
     --memory 768m -e JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=60" \
+    --log-driver awslogs \
+    --log-opt awslogs-region="$REGION" \
+    --log-opt awslogs-group="/ilro/$ENV_NAME/app" \
+    --log-opt mode=non-blocking --log-opt max-buffer-size=4m \
     --env-file "$2" "$1" >/dev/null
 }
 

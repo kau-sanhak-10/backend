@@ -91,6 +91,7 @@ public record OwnerInquiryDetailResponse(Long inquiryId, InquiryStatus status, H
         Map<String, List<InquiryField>> byKey = fields.stream()
                 .collect(Collectors.groupingBy(InquiryField::getFieldKey));
         return Arrays.stream(InquiryFieldKey.values())
+                .filter(key -> key != InquiryFieldKey.CONTROLLER_MODEL || byKey.containsKey(key.getKey()))
                 .map(key -> fieldDetail(key, byKey.getOrDefault(key.getKey(), List.of())))
                 .toList();
     }

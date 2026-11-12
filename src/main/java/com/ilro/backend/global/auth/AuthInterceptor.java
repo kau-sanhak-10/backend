@@ -11,6 +11,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.cors.CorsUtils;
 import org.springframework.web.servlet.HandlerInterceptor;
+import org.slf4j.MDC;
 
 import java.util.Set;
 
@@ -22,6 +23,7 @@ public class AuthInterceptor implements HandlerInterceptor {
 
     public static final String PRINCIPAL_ATTRIBUTE = AuthPrincipal.class.getName();
     private static final String BEARER_PREFIX = "Bearer ";
+    public static final String ACTOR_LOG_KEY = "actor";
 
     private final AuthTokenService authTokenService;
     private final OwnerAccessPolicy ownerAccessPolicy;
@@ -34,6 +36,8 @@ public class AuthInterceptor implements HandlerInterceptor {
             return true;
         }
         AuthPrincipal principal = authTokenService.authenticate(bearerToken(request));
+        // 이 요청의 로그에 요청한 주체를 붙임 (요청이 끝나면 RequestIdFilter가 지움)
+        MDC.put(ACTOR_LOG_KEY, principal.logActor());
         if (!allowedTypes.contains(principal.type())) {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);
         }

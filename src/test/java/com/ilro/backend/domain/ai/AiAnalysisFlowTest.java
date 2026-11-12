@@ -1,10 +1,13 @@
 package com.ilro.backend.domain.ai;
 
 import com.ilro.backend.domain.ai.service.AiAnalysisService;
+import com.ilro.backend.domain.ai.service.AiAnalysisQueue;
+import com.ilro.backend.domain.ai.service.AiAnalysisRequested;
 import com.ilro.backend.domain.ai.service.AiAnalysisStore;
 import com.ilro.backend.domain.inquiry.entity.HandlerMode;
 import com.ilro.backend.domain.inquiry.entity.InquiryFieldSource;
 import com.ilro.backend.domain.inquiry.entity.MessageSender;
+import com.ilro.backend.domain.inquiry.repository.InquiryRepository;
 import com.ilro.backend.domain.owner.entity.WorkCategory;
 import com.ilro.backend.infra.ai.AiCallResult;
 import com.ilro.backend.infra.ai.AiCallResult.Outcome;
@@ -12,10 +15,12 @@ import com.ilro.backend.infra.ai.AnalyzeRequest;
 import com.ilro.backend.infra.ai.AnalyzeResult;
 import com.ilro.backend.infra.ai.AnalyzeResult.Evidence;
 import com.ilro.backend.infra.ai.AnalyzeResult.Fact;
+import com.ilro.backend.infra.ai.HttpAiAnalyzeClient;
 import com.ilro.backend.support.ScriptedAiClient;
 import com.ilro.backend.support.TestAccounts;
 import com.ilro.backend.support.TestAiConfig;
 import com.jayway.jsonpath.JsonPath;
+import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -33,18 +38,27 @@ import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 import tools.jackson.databind.json.JsonMapper;
+import com.ilro.backend.infra.storage.LocalPhotoStorage;
 
 import java.math.BigDecimal;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -73,7 +87,11 @@ class AiAnalysisFlowTest {
     @Autowired
     private AiAnalysisStore store;
     @Autowired
+    private InquiryRepository inquiryRepository;
+    @Autowired
     private ScriptedAiClient ai;
+    @Autowired
+    private LocalPhotoStorage photoStorage;
 
     private MockMvc mockMvc;
     private TestAccounts accounts;
@@ -189,6 +207,77 @@ class AiAnalysisFlowTest {
     }
 
     @Test
+    @DisplayName("사진 - 이번 메시지에 붙은 업로드 완료 사진만 원본 임시 주소로 보내고, 요청 기록에는 주소를 남기지 않음")
+    void photosInRequest() throws Exception {
+        Session session = startInquiry();
+        long attached = uploadedPhoto(session);
+        uploadedPhoto(session); // 올리기만 하고 메시지에 안 붙인 사진은 보내지 않음
+        long messageId = sendWithPhoto(session, "보일러 화면 사진이에요", attached);
+        ai.then(reply(answer("COMPLETE", "DONE")));
+
+        analysisService.analyze(session.inquiryId());
+
+        assertThat(ai.requests().getFirst().photos()).singleElement().satisfies(photo -> {
+            assertThat(photo.photoId()).isEqualTo(attached);
+            assertThat(photo.messageId()).isEqualTo(messageId);
+            assertThat(photo.imageUrl()).contains("inquiries/" + session.inquiryId() + "/");
+        });
+        // DB 기록에는 사진·메시지 번호만, 주소는 비움
+        String snapshot = jdbc.queryForObject("SELECT input_snapshot::text FROM ai_decision WHERE inquiry_id = ?",
+                String.class, session.inquiryId());
+        assertThat(((Number) JsonPath.read(snapshot, "$.photos[0].photoId")).longValue()).isEqualTo(attached);
+        assertThat((Object) JsonPath.read(snapshot, "$.photos[0].imageUrl")).isNull();
+        assertThat(snapshot).doesNotContain("local-photo-storage");
+    }
+
+    @Test
+    @DisplayName("적용된 사진만 다음 턴에서 재분석 제외, 미완료·새 사진 및 사장님 화면의 근거는 유지")
+    void skipsOnlyAppliedPhotosOnNextTurn() throws Exception {
+        Session session = startInquiry();
+        long completed = uploadedPhoto(session);
+        long pending = uploadedPhoto(session);
+        long photoMessage = sendWithPhoto(session, "", completed);
+        sendWithPhoto(session, "", pending);
+        AiAnalysisStore.Snapshot stale = store.prepare(session.inquiryId()).orElseThrow();
+        send(session, "사진을 먼저 확인해 주세요");
+        assertThat(store.apply(stale, ok(answer("ASK_MORE_INFO", "MISSING_FIELD").analyzed(pending)
+                .build(stale.request())))).isEqualTo(AiAnalysisStore.State.NEW_INPUT);
+
+        ai.then(reply(answer("ASK_MORE_INFO", "MISSING_FIELD").targets("symptom")
+                .fact(new Fact("model", "NCB-500", "PHOTO", "CONFIRMED", null, new Evidence(null, completed)))
+                .analyzed(completed)));
+        analysisService.analyze(session.inquiryId());
+        assertThat(ai.requests().getFirst().processedPhotoIds()).isEmpty();
+
+        long newPhoto = uploadedPhoto(session);
+        sendWithPhoto(session, "", newPhoto);
+        ai.then(reply(answer("ASK_MORE_INFO", "MISSING_FIELD").targets("symptom")
+                .fact(new Fact("controller_model", "CTRL-1", "PHOTO", "CONFIRMED", null,
+                        new Evidence(null, newPhoto)))
+                .analyzed(pending, newPhoto)));
+        analysisService.analyze(session.inquiryId());
+
+        AnalyzeRequest next = ai.requests().getLast();
+        assertThat(next.processedPhotoIds()).containsExactly(completed);
+        assertThat(next.photos()).extracting(AnalyzeRequest.PhotoItem::photoId)
+                .containsExactly(completed, pending, newPhoto);
+        assertThat(next.messages()).anySatisfy(message -> {
+            assertThat(message.messageId()).isEqualTo(photoMessage);
+            assertThat(message.content()).isEmpty();
+        });
+        assertThat(decisionStatuses(session)).containsExactly("STALE", "SUCCESS", "SUCCESS");
+        getAs(accounts.ownerToken(ownerId), "/api/v1/owner/inquiries/" + session.inquiryId())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.fields[1].value").value("NCB-500"))
+                .andExpect(jsonPath("$.result.fields[1].source").value("PHOTO"))
+                .andExpect(jsonPath("$.result.fields[5].fieldKey").value("controller_model"))
+                .andExpect(jsonPath("$.result.fields[5].value").value("CTRL-1"))
+                .andExpect(jsonPath("$.result.fields[5].photoId").value(newPhoto))
+                .andExpect(jsonPath("$.result.photos[0].photoId").value(completed));
+    }
+
+
+    @Test
     @DisplayName("이름·전화번호·주소는 AI 서버에 보내지 않음 - 요청 기록(input_snapshot)에도 없음")
     void noPersonalInfoInRequest() throws Exception {
         Session session = startInquiry();
@@ -275,6 +364,69 @@ class AiAnalysisFlowTest {
                 session.inquiryId())).containsExactly("누수·소음");
         assertThat(aiMessages(session)).isEqualTo(1);
         assertThat(inquiry(session)).containsEntry("status", "COLLECTING");
+    }
+
+    @Test
+    @DisplayName("사진 응답이 늦어도 같은 문의의 새 안전 신고를 먼저 저장하고 이전 결과는 폐기")
+    void newSafetyTextDoesNotWaitForPhotoResponse() throws Exception {
+        Session session = startInquiry();
+        long photo = uploadedPhoto(session);
+        sendWithPhoto(session, "", photo);
+        var photoCallStarted = new CountDownLatch(1);
+        var releasePhotoCall = new CountDownLatch(1);
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        try (var serverThreads = Executors.newVirtualThreadPerTaskExecutor();
+             var queueThread = Executors.newSingleThreadExecutor()) {
+            server.setExecutor(serverThreads);
+            server.createContext("/internal/v1/inquiries/analyze", exchange -> {
+                try (exchange) {
+                    var request = jsonMapper.readValue(exchange.getRequestBody(), AnalyzeRequest.class);
+                    boolean safety = request.messages().stream().anyMatch(msg -> msg.content().contains("가스 냄새"));
+                    Answer response;
+                    if (safety) {
+                        response = answer("ESCALATE_TO_OWNER", "SAFETY").safety().byRule();
+                    } else {
+                        photoCallStarted.countDown();
+                        releasePhotoCall.await(10, TimeUnit.SECONDS);
+                        response = answer("ASK_MORE_INFO", "MISSING_FIELD").analyzed(photo);
+                    }
+                    byte[] body = ok(response.build(request)).rawBody().getBytes(StandardCharsets.UTF_8);
+                    exchange.sendResponseHeaders(200, body.length);
+                    exchange.getResponseBody().write(body);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+            server.start();
+            var client = new HttpAiAnalyzeClient(jsonMapper, "http://127.0.0.1:" + server.getAddress().getPort(),
+                    "test-key", Duration.ofSeconds(2));
+            var service = new AiAnalysisService(store, client, Clock.systemUTC(), Duration.ofSeconds(8),
+                    Duration.ofSeconds(12));
+            var queue = new AiAnalysisQueue(service, inquiryRepository, queueThread::execute, Clock.systemUTC(), true);
+            try {
+                queue.request(session.inquiryId());
+                assertThat(photoCallStarted.await(3, TimeUnit.SECONDS)).isTrue();
+                long report = send(session, "가스 냄새가 나요.");
+                queue.on(new AiAnalysisRequested(session.inquiryId(), report));
+
+                long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(4);
+                while (!Boolean.TRUE.equals(inquiry(session).get("safety_flag")) && System.nanoTime() < until) {
+                    Thread.sleep(25);
+                }
+                assertThat(inquiry(session)).containsEntry("status", "OWNER_CHECK").containsEntry("safety_flag", true);
+                assertThat(releasePhotoCall.getCount()).isEqualTo(1);
+                assertThat(decisionStatuses(session)).containsExactly("STALE", "SUCCESS");
+                assertThat(jdbc.queryForObject("SELECT error_message FROM ai_decision WHERE inquiry_id = ? AND status = 'STALE'",
+                        String.class, session.inquiryId())).isEqualTo("INPUT_SUPERSEDED");
+                assertThat(aiMessages(session)).isEqualTo(1);
+                assertThat(notifications(session)).isEqualTo(1);
+                assertThat(jdbc.queryForList("SELECT id FROM message WHERE inquiry_id = ? AND sender = 'CUSTOMER' ORDER BY id",
+                        Long.class, session.inquiryId())).contains(report).hasSize(2);
+            } finally {
+                releasePhotoCall.countDown();
+                server.stop(0);
+            }
+        }
     }
 
     @Test
@@ -392,6 +544,32 @@ class AiAnalysisFlowTest {
         assertThat(decisionStatuses(session)).containsExactly("FAILED");
         assertThat(inquiry(session)).containsEntry("status", "OWNER_CHECK");
         assertThat(notifications(session)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("최신 입력의 분석 실패 시 이전 예약 안내는 숨기고 원문·사진과 실패 이유를 보존")
+    void ownerSeesCurrentAnalysisFailureInsteadOfPreviousDecision() throws Exception {
+        Session session = startInquiry();
+        long messageId = send(session, "온수가 나오지 않아요");
+        ai.then(reply(answer("CHECK_SCHEDULE", "DONE").fact("symptom", "온수가 나오지 않아요", messageId)));
+        analysisService.analyze(session.inquiryId());
+
+        long photoId = uploadedPhoto(session);
+        sendWithPhoto(session, "추가 사진을 보냅니다", photoId);
+        ai.then(failure(Outcome.FAILED, false, "AI_MODEL_ERROR"));
+        analysisService.analyze(session.inquiryId());
+
+        String owner = accounts.ownerToken(ownerId);
+        String path = "/api/v1/owner/inquiries/" + session.inquiryId();
+        getAs(owner, path).andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.status").value("OWNER_CHECK"))
+                .andExpect(jsonPath("$.result.aiSummary.nextAction").value(nullValue()))
+                .andExpect(jsonPath("$.result.aiSummary.nextActionReason")
+                        .value("이번 AI 분석을 완료하지 못했어요. 고객이 보낸 대화와 사진을 확인해 주세요."))
+                .andExpect(jsonPath("$.result.photos[0].photoId").value(photoId));
+        String conversation = getAs(owner, path + "/messages").andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(conversation).contains("온수가 나오지 않아요", "추가 사진을 보냅니다");
     }
 
     @Test
@@ -662,6 +840,7 @@ class AiAnalysisFlowTest {
         private final List<Fact> facts = new ArrayList<>();
         private final List<AnalyzeResult.Conflict> conflicts = new ArrayList<>();
         private List<String> targets = List.of();
+        private List<Long> analyzed = List.of();
         private String category;
         private boolean safety;
         private String decidedBy = "EXTERNAL_API";
@@ -682,6 +861,11 @@ class AiAnalysisFlowTest {
 
         Answer fact(Fact fact) {
             facts.add(fact);
+            return this;
+        }
+
+        Answer analyzed(Long... photoIds) {
+            analyzed = List.of(photoIds);
             return this;
         }
 
@@ -713,7 +897,7 @@ class AiAnalysisFlowTest {
                     new AnalyzeResult.WorkCategoryDecision(category, category == null ? "UNCONFIRMED" : "CONFIRMED"),
                     new AnalyzeResult.Safety(safety, safety ? List.of("GAS_SMELL") : List.of()), "ANSWER",
                     new AnalyzeResult.NextAction(action, ruleReason, targets, "test"),
-                    new AnalyzeResult.Reply("확인했어요."), new BigDecimal("0.876"));
+                    new AnalyzeResult.Reply("확인했어요."), new BigDecimal("0.876"), analyzed);
         }
     }
 
@@ -759,6 +943,33 @@ class AiAnalysisFlowTest {
             throw new IllegalStateException(e);
         }
     }
+
+    // 업로드를 마친(DONE) 사진 하나 - 가짜 저장소에 파일이 올라간 것으로 만듦
+    private long uploadedPhoto(Session session) throws Exception {
+        String body = postAs(session.token(), session.path("/photos"),
+                "{\"contentType\":\"image/jpeg\",\"sizeBytes\":1000}")
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        long photoId = ((Number) JsonPath.read(body, "$.result.photoId")).longValue();
+        String key = jdbc.queryForObject("SELECT s3_key_original FROM photo WHERE id = ?", String.class, photoId);
+        photoStorage.putForTest(key, 1000, "image/jpeg");
+        postAs(session.token(), session.path("/photos/" + photoId + "/complete"), "")
+                .andExpect(jsonPath("$.result.uploadStatus").value("DONE"));
+        return photoId;
+    }
+
+    private long sendWithPhoto(Session session, String content, long photoId) throws Exception {
+        Map<String, Object> request = new HashMap<>(Map.of(
+                "clientMsgId", UUID.randomUUID().toString(), "photoIds", List.of(photoId)));
+        if (!content.isEmpty()) {
+            request.put("content", content);
+        }
+        String body = postAs(session.token(), session.path("/messages"), jsonMapper.writeValueAsString(request))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        return ((Number) JsonPath.read(body, "$.result.messageId")).longValue();
+    }
+
 
     private Map<String, Object> inquiry(Session session) {
         return jdbc.queryForMap("SELECT status, version, ai_input_seq, safety_flag, symptom, model, work_type_id "

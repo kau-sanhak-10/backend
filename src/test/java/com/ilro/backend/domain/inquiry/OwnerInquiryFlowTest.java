@@ -328,8 +328,14 @@ class OwnerInquiryFlowTest {
         // 고객이 다른 값으로 고치면 저장하되 미확인(CONFLICT) - 사장님이 다시 확인
         patchAs(session.token(), session.path("/fields"),
                 customerFields(before + 1, field("symptom", "온수가 안 나와요"))).andExpect(status().isOk());
+        getAs(session.token(), session.path("/fields"))
+                .andExpect(jsonPath("$.result.fields[?(@.fieldKey == 'symptom')].value", contains("온수가 안 나와요")))
+                .andExpect(jsonPath("$.result.fields[?(@.fieldKey == 'symptom')].source", contains("CUSTOMER")))
+                .andExpect(jsonPath("$.result.fields[?(@.fieldKey == 'symptom')].status", contains("UNCONFIRMED")))
+                .andExpect(jsonPath("$.result.fields[?(@.fieldKey == 'symptom')].unconfirmedReason", contains("CONFLICT")));
         getAs(ownerToken, session.ownerPath(""))
                 .andExpect(jsonPath("$.result.fields[4].value").value("온수가 안 나와요"))
+                .andExpect(jsonPath("$.result.fields[4].source").value("CUSTOMER"))
                 .andExpect(jsonPath("$.result.fields[4].status").value("UNCONFIRMED"))
                 .andExpect(jsonPath("$.result.fields[4].unconfirmedReason").value("CONFLICT"));
 

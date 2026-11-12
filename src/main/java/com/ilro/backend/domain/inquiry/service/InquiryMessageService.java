@@ -114,7 +114,8 @@ public class InquiryMessageService {
         inquiryRepository.incrementAiInputSeq(inquiry.getId());
         AiStatus aiStatus = aiStatus(inquiry);
         if (aiStatus == AiStatus.PROCESSING) {
-            eventPublisher.publishEvent(new AiAnalysisRequested(inquiry.getId()));
+            eventPublisher.publishEvent(new AiAnalysisRequested(inquiry.getId(),
+                    request.content() == null || request.content().isBlank() ? 0 : message.getId()));
         }
         AccessLog.record(principal, "UPDATE", "inquiry.messages", inquiryId);
         return new SentMessage(SendMessageResponse.of(message, aiStatus), true);

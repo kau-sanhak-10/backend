@@ -54,6 +54,7 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -67,6 +68,8 @@ public class OwnerInquiryService {
 
     private static final int DEFAULT_PAGE_SIZE = 20;
     private static final int MAX_PAGE_SIZE = 100;
+    private static final Set<AiDecisionStatus> FAILED_DECISIONS = Set.of(
+            AiDecisionStatus.TIMEOUT, AiDecisionStatus.INVALID_OUTPUT, AiDecisionStatus.FAILED);
 
     private final InquiryAccess inquiryAccess;
     private final InquiryFieldService fieldService;
@@ -194,7 +197,8 @@ public class OwnerInquiryService {
                 .toList();
         return OwnerInquiryDetailResponse.of(inquiry, fieldRepository.findAllOf(inquiryId),
                 aiSummary(inquiry, decision),
-                photoRepository.findByInquiryIdAndUploadStatusOrderByIdAsc(inquiryId, PhotoUploadStatus.DONE),
+                photoRepository.findByInquiryIdAndUploadStatusAndMessageIsNotNullOrderByIdAsc(
+                        inquiryId, PhotoUploadStatus.DONE),
                 handoffRepository.findByInquiryIdOrderByIdDesc(inquiryId),
                 reservationRepository.findByInquiryIdAndStatusNot(inquiryId, ReservationStatus.CANCELED).orElse(null),
                 consents, !fieldService.findRequiredWaitingOwner(List.of(inquiryId)).isEmpty());
@@ -202,6 +206,17 @@ public class OwnerInquiryService {
 
     // 해석은 적용된 마지막 AI 판단의 원본 응답(result)에서 꺼냄 - 사실(항목 값)과 섞지 않음
     private AiSummary aiSummary(Inquiry inquiry, AiDecision decision) {
+        if (inquiry.getStatus() == InquiryStatus.OWNER_CHECK
+                && (decision == null || !Objects.equals(decision.getInputVersion(), inquiry.getAiInputSeq()))) {
+            List<AiDecision> failures = aiDecisionRepository.findByInquiryIdAndInputVersionAndStatusInOrderByIdAsc(
+                    inquiry.getId(), inquiry.getAiInputSeq(), FAILED_DECISIONS);
+            if (!failures.isEmpty()) {
+                AiDecision last = failures.getLast();
+                return new AiSummary(null, List.of(), List.of(), List.of(), null,
+                        "이번 AI 분석을 완료하지 못했어요. 고객이 보낸 대화와 사진을 확인해 주세요.",
+                        KstTime.of(last.getCreatedAt()));
+            }
+        }
         if (decision == null) {
             return inquiry.getAiSummary() == null ? null
                     : new AiSummary(inquiry.getAiSummary(), List.of(), List.of(), List.of(), null, null, null);

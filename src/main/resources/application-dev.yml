@@ -3,6 +3,10 @@
 
 # 개발 서버(AWS) 설정 — DB(RDS) 등은 배포 세팅 때 추가
 logging:
+  structured:
+    format:
+      # 로그 한 줄을 JSON 하나로 - CloudWatch에서 requestId·actor로 검색, 오류 스택도 한 덩어리로
+      console: logstash
   level:
     com.ilro: debug
 
