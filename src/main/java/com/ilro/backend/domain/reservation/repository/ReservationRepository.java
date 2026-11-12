@@ -21,4 +21,10 @@ public interface ReservationRepository extends JpaRepository<Reservation, Long> 
             + "order by r.startAt, r.id")
     List<Reservation> findStartingBetween(@Param("ownerId") Long ownerId, @Param("from") Instant from,
                                           @Param("to") Instant to, @Param("excluded") ReservationStatus excluded);
+
+    // 기간과 겹치는 예약 (취소 제외) - 방문 가능 시간 계산의 기존 방문 (명세 5.2)
+    @Query("select r from Reservation r where r.owner.id = :ownerId and r.status <> :excluded "
+            + "and r.startAt < :to and r.endAt > :from order by r.startAt, r.id")
+    List<Reservation> findOverlapping(@Param("ownerId") Long ownerId, @Param("from") Instant from,
+                                      @Param("to") Instant to, @Param("excluded") ReservationStatus excluded);
 }
