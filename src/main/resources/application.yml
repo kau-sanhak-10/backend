@@ -70,3 +70,9 @@ app:
     failure-cache-ttl: 1m
     # 기억하는 구간 수 - 넘으면 오래 안 쓴 구간부터 지움
     travel-cache-size: 10000
+  kakao:
+    # 카카오 REST API 키 - 주소·지역 검색(BE-15), 나중에 길찾기도 같은 키
+    # 서버(dev·prod)는 Parameter Store, 로컬은 .env (비어 있으면 로컬·테스트는 가짜 검색)
+    rest-api-key: ${KAKAO_REST_API_KEY:}
+    # 카카오 로컬 API 주소 (주소·지역 검색 - 카카오 상품 이름, 우리 local 프로필과 무관)
+    local-base-url: https://dapi.kakao.com
