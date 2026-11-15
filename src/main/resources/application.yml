@@ -63,3 +63,8 @@ app:
   booking:
     # 방문 가능 시간 후보 간격 - 영업 시작부터 이 간격마다 (C-12)
     slot-step: 30m
+  kakao:
+    # 카카오 REST API 키 ...
+    rest-api-key: ${KAKAO_REST_API_KEY:}
+    # 카카오 로컬 API 주소 (주소·지역 검색 - 카카오 상품 이름, 우리 local 프로필과 무관)
+    local-base-url: https://dapi.kakao.com
