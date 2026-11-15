@@ -2,6 +2,7 @@ package com.ilro.backend.domain.reservation;
 
 import com.ilro.backend.domain.owner.entity.Owner;
 import com.ilro.backend.domain.owner.repository.OwnerRepository;
+import com.ilro.backend.domain.reservation.exception.MapUnavailableException;
 import com.ilro.backend.domain.reservation.exception.SlotUnavailableReason;
 import com.ilro.backend.domain.reservation.service.MapLookup;
 import com.ilro.backend.domain.reservation.service.SlotCheck;
@@ -46,6 +47,7 @@ import java.util.Map;
 import java.util.OptionalInt;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.hamcrest.Matchers.contains;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -82,14 +84,20 @@ class TravelTimeFlowTest {
 
         final Map<List<GeoPoint>, Integer> minutes = new HashMap<>();
         final List<List<GeoPoint>> asked = Collections.synchronizedList(new ArrayList<>());
+        // 지도 장애 (예외)
         volatile boolean travelFails;
         volatile boolean areaFails;
+        // 지도가 셀 수 없다고 답함 (빈 값·UNKNOWN)
+        volatile boolean noRoute;
+        volatile boolean areaUnknown;
 
         void reset() {
             minutes.clear();
             asked.clear();
             travelFails = false;
             areaFails = false;
+            noRoute = false;
+            areaUnknown = false;
         }
 
         @Override
@@ -98,6 +106,9 @@ class TravelTimeFlowTest {
             if (travelFails) {
                 throw new IllegalStateException("지도 응답 시간 초과");
             }
+            if (noRoute) {
+                return OptionalInt.empty();
+            }
             return OptionalInt.of(minutes.getOrDefault(List.of(from, to), 20));
         }
 
@@ -105,6 +116,9 @@ class TravelTimeFlowTest {
         public ServiceAreaMatch matchServiceArea(GeoPoint point, List<String> regionCodes) {
             if (areaFails) {
                 throw new IllegalStateException("지도 서버 오류");
+            }
+            if (areaUnknown) {
+                return ServiceAreaMatch.UNKNOWN;
             }
             return regionCodes.isEmpty() ? ServiceAreaMatch.OUTSIDE : ServiceAreaMatch.INSIDE;
         }
@@ -192,33 +206,69 @@ class TravelTimeFlowTest {
     }
 
     @Test
-    @DisplayName("지도 오류 - 이동시간을 0분으로 만들지 않고 422 TRAVEL_TIME_UNAVAILABLE, 문의는 사장님 확인 + 알림 1")
+    @DisplayName("지도 장애(이동시간) - 0분으로 만들지 않고 503 MAP_UNAVAILABLE, 문의는 그대로(상태·버전, 알림 없음), 지도가 돌아오면 같은 문의로 후보")
     void travelMapError() throws Exception {
         Session session = readyInquiry();
+        int versionBefore = inquiryVersion(session);
         map.travelFails = true;
 
         getAs(session.token(), session.slots("?from=" + monday + "&days=1"))
-                .andExpect(status().isUnprocessableContent())
-                .andExpect(jsonPath("$.code").value("TRAVEL_TIME_UNAVAILABLE"));
-        assertThat(inquiryStatus(session)).isEqualTo("OWNER_CHECK");
-        assertThat(notifications(session)).isEqualTo(1);
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("MAP_UNAVAILABLE"));
+        assertThat(inquiryStatus(session)).isEqualTo("SCHEDULING");
+        assertThat(inquiryVersion(session)).isEqualTo(versionBefore);
+        assertThat(notifications(session)).isZero();
+
+        // 장애는 1분만 기억 - 1분이 지난 것으로
+        map.travelFails = false;
+        mapLookup.clear();
+        getAs(session.token(), session.slots("?from=" + monday + "&days=1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.days[0].slots").isNotEmpty());
+        assertThat(inquiryStatus(session)).isEqualTo("SCHEDULING");
     }
 
     @Test
-    @DisplayName("지역 판별 오류 - 지역 안으로 보지 않고 422 OUT_OF_SERVICE_AREA, 문의는 사장님 확인")
+    @DisplayName("지도 장애(지역 판별) - 지역 안으로 보지 않고 503 MAP_UNAVAILABLE, 문의는 그대로, 지도가 돌아오면 바로 후보")
     void areaMapError() throws Exception {
         Session session = readyInquiry();
+        int versionBefore = inquiryVersion(session);
         map.areaFails = true;
 
         getAs(session.token(), session.slots("?from=" + monday + "&days=1"))
-                .andExpect(status().isUnprocessableContent())
-                .andExpect(jsonPath("$.code").value("OUT_OF_SERVICE_AREA"));
-        assertThat(inquiryStatus(session)).isEqualTo("OWNER_CHECK");
-        assertThat(notifications(session)).isEqualTo(1);
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("MAP_UNAVAILABLE"));
+        assertThat(inquiryStatus(session)).isEqualTo("SCHEDULING");
+        assertThat(inquiryVersion(session)).isEqualTo(versionBefore);
+        assertThat(notifications(session)).isZero();
+
+        map.areaFails = false;
+        getAs(session.token(), session.slots("?from=" + monday + "&days=1"))
+                .andExpect(status().isOk());
     }
 
     @Test
-    @DisplayName("한 시각 검사 - 예약 변경은 자기 예약을 빼고 검사, 좌표 없는 방문지는 이동시간 모름 (B-18·B-19·BE-11)")
+    @DisplayName("지도가 셀 수 없다고 답함(경로 없음·지역 판별 불가) - 지금처럼 422, 문의는 사장님 확인 + 알림 1")
+    void mapCannotCompute() throws Exception {
+        Session noRoute = readyInquiry();
+        map.noRoute = true;
+        getAs(noRoute.token(), noRoute.slots("?from=" + monday + "&days=1"))
+                .andExpect(status().isUnprocessableContent())
+                .andExpect(jsonPath("$.code").value("TRAVEL_TIME_UNAVAILABLE"));
+        assertThat(inquiryStatus(noRoute)).isEqualTo("OWNER_CHECK");
+        assertThat(notifications(noRoute)).isEqualTo(1);
+
+        Session unknownArea = readyInquiry();
+        map.areaUnknown = true;
+        getAs(unknownArea.token(), unknownArea.slots("?from=" + monday + "&days=1"))
+                .andExpect(status().isUnprocessableContent())
+                .andExpect(jsonPath("$.code").value("OUT_OF_SERVICE_AREA"));
+        assertThat(inquiryStatus(unknownArea)).isEqualTo("OWNER_CHECK");
+        assertThat(notifications(unknownArea)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("한 시각 검사 - 예약 변경은 자기 예약을 빼고 검사, 좌표 없는 방문지는 이동시간 모름, 지도 장애는 MapUnavailableException (B-18·B-19·BE-11)")
     void checkOneTime() {
         long own = reservation(monday, 10, 0, 11, 0, CUSTOMER, "CONFIRMED");
         reservation(monday, 15, 0, 16, 0, OTHER, "CONFIRMED");
@@ -236,6 +286,11 @@ class TravelTimeFlowTest {
 
         assertThat(scheduleService.check(owner, at(monday, 10, 30).toInstant(), 60, null, own).travelUnknown())
                 .isTrue();
+
+        map.travelFails = true;
+        mapLookup.clear();
+        assertThatThrownBy(() -> scheduleService.check(owner, at(monday, 10, 30).toInstant(), 60, CUSTOMER, own))
+                .isInstanceOf(MapUnavailableException.class);
     }
 
     @Test
@@ -263,6 +318,24 @@ class TravelTimeFlowTest {
         assertThat(plans.get(0).needsCheck()).isTrue();
         assertThat(plans.get(1).visits()).isEmpty();
         assertThat(map.asked).containsExactly(List.of(ORIGIN, CUSTOMER), List.of(CUSTOMER, OTHER));
+    }
+
+    @Test
+    @DisplayName("하루 일정 - 지도 장애여도 일정은 보여 주고 그 이동시간만 UNKNOWN (보여 주기만 하므로 막지 않음)")
+    void dayPlanDuringMapOutage() {
+        long first = reservation(monday, 9, 30, 10, 30, CUSTOMER, "CONFIRMED");
+        long second = reservation(monday, 11, 0, 12, 0, OTHER, "CONFIRMED");
+        map.travelFails = true;
+        Owner owner = ownerRepository.findById(ownerId).orElseThrow();
+
+        List<DayPlan> plans = scheduleService.plan(owner, monday, monday.plusDays(1));
+
+        assertThat(plans.get(0).visits())
+                .extracting(PlannedVisit::reservationId, PlannedVisit::travelMinutes, PlannedVisit::bufferMinutes,
+                        PlannedVisit::travelStatus)
+                .containsExactly(
+                        tuple(first, null, null, TravelStatus.UNKNOWN),
+                        tuple(second, null, 15, TravelStatus.UNKNOWN));
     }
 
     // ---------- 도움 함수 ----------
@@ -304,6 +377,10 @@ class TravelTimeFlowTest {
 
     private String inquiryStatus(Session session) {
         return jdbc.queryForObject("SELECT status FROM inquiry WHERE id = ?", String.class, session.inquiryId());
+    }
+
+    private int inquiryVersion(Session session) {
+        return jdbc.queryForObject("SELECT version FROM inquiry WHERE id = ?", Integer.class, session.inquiryId());
     }
 
     private int notifications(Session session) {

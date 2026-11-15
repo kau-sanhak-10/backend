@@ -1,5 +1,6 @@
 package com.ilro.backend.domain.reservation;
 
+import com.ilro.backend.domain.reservation.exception.MapUnavailableException;
 import com.ilro.backend.domain.reservation.service.MapLookup;
 import com.ilro.backend.domain.reservation.service.TravelTimes;
 import com.ilro.backend.infra.map.GeoPoint;
@@ -22,8 +23,9 @@ import java.util.OptionalInt;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-// 지도 조회 (BE-10) - 요청을 넘는 이동시간 기억(6시간, 실패는 1분), 지도 오류·약속과 다른 값은 '모름'
+// 지도 조회 (BE-10) - 요청을 넘는 이동시간 기억(6시간, 셀 수 없음·장애는 1분), 셀 수 없다는 답은 '모름', 지도 오류·약속과 다른 값은 지도 장애
 class MapLookupTest {
 
     private static final GeoPoint A = point("37.600", "126.800");
@@ -98,28 +100,59 @@ class MapLookupTest {
     }
 
     @Test
-    @DisplayName("지도가 답하지 못함·오류·음수·null은 모름 - 0분으로 바꾸지 않고, 1분만 기억한 뒤 다시 물음")
-    void failuresAreUnknown() {
+    @DisplayName("지도가 셀 수 없다고 답하면 모름 - 0분으로 바꾸지 않고, 1분만 기억한 뒤 다시 물음")
+    void cannotComputeIsUnknown() {
         MapLookup lookup = lookup(100);
         answers.put(List.of(A, B), OptionalInt::empty);
-        answers.put(List.of(A, C), () -> {
+
+        assertThat(lookup.travelMinutes(A, B)).isEmpty();
+        now = now.plusSeconds(59);
+        assertThat(lookup.travelMinutes(A, B)).isEmpty();
+        assertThat(asked).as("1분 안에는 다시 묻지 않음").hasSize(1);
+
+        answers.put(List.of(A, B), () -> OptionalInt.of(15));
+        now = now.plusSeconds(1);
+        assertThat(lookup.travelMinutes(A, B)).hasValue(15);
+        assertThat(asked).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("지도 장애(오류·시간 초과)·약속과 다른 값(음수·null)은 모름이 아니라 MapUnavailableException - 1분만 기억하고 지도가 돌아오면 바로 반영")
+    void mapFailures() {
+        MapLookup lookup = lookup(100);
+        answers.put(List.of(A, B), () -> {
             throw new IllegalStateException("지도 응답 시간 초과");
         });
         answers.put(List.of(B, C), () -> OptionalInt.of(-5));
         answers.put(List.of(C, A), () -> null);
 
-        assertThat(lookup.travelMinutes(A, B)).isEmpty();
-        assertThat(lookup.travelMinutes(A, C)).isEmpty();
-        assertThat(lookup.travelMinutes(B, C)).isEmpty();
-        assertThat(lookup.travelMinutes(C, A)).isEmpty();
+        assertThatThrownBy(() -> lookup.travelMinutes(A, B)).isInstanceOf(MapUnavailableException.class);
+        assertThatThrownBy(() -> lookup.travelMinutes(B, C)).isInstanceOf(MapUnavailableException.class);
+        assertThatThrownBy(() -> lookup.travelMinutes(C, A)).isInstanceOf(MapUnavailableException.class);
         now = now.plusSeconds(59);
-        assertThat(lookup.travelMinutes(A, B)).isEmpty();
-        assertThat(asked).as("1분 안에는 다시 묻지 않음").hasSize(4);
+        assertThatThrownBy(() -> lookup.newRequest().minutes(A, B)).as("기억한 장애도 같음")
+                .isInstanceOf(MapUnavailableException.class);
+        assertThat(asked).as("1분 안에는 다시 묻지 않음").hasSize(3);
 
         answers.put(List.of(A, B), () -> OptionalInt.of(15));
         now = now.plusSeconds(1);
         assertThat(lookup.travelMinutes(A, B)).as("지도가 돌아오면 바로 반영").hasValue(15);
-        assertThat(asked).hasSize(5);
+        assertThat(asked).hasSize(4);
+    }
+
+    @Test
+    @DisplayName("보여 주기용 요청(사장님 일정)은 지도 장애도 모름으로 - 예외 없이 빈 값, 셀 수 있는 구간은 그대로")
+    void displayRequestShowsFailureAsUnknown() {
+        MapLookup lookup = lookup(100);
+        answers.put(List.of(A, B), () -> {
+            throw new IllegalStateException("지도 서버 오류");
+        });
+        TravelTimes display = lookup.newDisplayRequest();
+
+        assertThat(display.minutes(A, B)).isEmpty();
+        assertThat(display.minutes(A, C)).hasValue(20);
+        assertThatThrownBy(() -> lookup.newRequest().minutes(A, B)).as("예약 검사용 요청은 그대로 장애")
+                .isInstanceOf(MapUnavailableException.class);
     }
 
     @Test
@@ -152,7 +185,7 @@ class MapLookupTest {
     }
 
     @Test
-    @DisplayName("서비스 지역 - 지도 답은 그대로, 지도 오류·null은 UNKNOWN (지역 안으로 보지 않음)")
+    @DisplayName("서비스 지역 - 지도 답은 그대로(판별 불가는 UNKNOWN), 지도 오류·null은 MapUnavailableException (지역 안으로 보지 않음)")
     void serviceArea() {
         MapLookup lookup = lookup(100);
         assertThat(lookup.serviceArea(B, List.of("41281"))).isEqualTo(ServiceAreaMatch.INSIDE);
@@ -160,11 +193,19 @@ class MapLookupTest {
         area = ServiceAreaMatch.OUTSIDE;
         assertThat(lookup.serviceArea(B, List.of("41281"))).isEqualTo(ServiceAreaMatch.OUTSIDE);
 
-        area = null;
+        area = ServiceAreaMatch.UNKNOWN;
         assertThat(lookup.serviceArea(B, List.of("41281"))).isEqualTo(ServiceAreaMatch.UNKNOWN);
 
+        area = null;
+        assertThatThrownBy(() -> lookup.serviceArea(B, List.of("41281"))).isInstanceOf(MapUnavailableException.class);
+
         areaError = new IllegalStateException("지도 서버 오류");
-        assertThat(lookup.serviceArea(B, List.of("41281"))).isEqualTo(ServiceAreaMatch.UNKNOWN);
+        assertThatThrownBy(() -> lookup.serviceArea(B, List.of("41281"))).isInstanceOf(MapUnavailableException.class);
+
+        areaError = null;
+        area = ServiceAreaMatch.INSIDE;
+        assertThat(lookup.serviceArea(B, List.of("41281"))).as("기억하지 않음 - 지도가 돌아오면 바로")
+                .isEqualTo(ServiceAreaMatch.INSIDE);
     }
 
     private MapLookup lookup(int maxEntries) {

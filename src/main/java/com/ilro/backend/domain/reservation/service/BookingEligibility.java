@@ -64,7 +64,8 @@ public class BookingEligibility {
         if (inquiry.isSafetyFlag()) {
             return block(ReservationErrorCode.SAFETY_CHECK_REQUIRED);
         }
-        // 주소 좌표·서비스 지역 - 좌표가 없거나 지도가 판별하지 못하면(지도 오류 포함) 지역 밖과 같이 사장님 확인
+        // 주소 좌표·서비스 지역 - 좌표가 없거나 지도가 판별할 수 없다고 답하면 지역 밖과 같이 사장님 확인
+        //   지도 장애는 MapUnavailableException(503)이 그대로 나감 - 문의를 사장님 확인으로 넘기지 않음
         Optional<GeoPoint> destination = destination(inquiry);
         List<String> regionCodes = serviceAreaRepository.findByOwnerIdOrderByIdAsc(owner.getId()).stream()
                 .map(OwnerServiceArea::getRegionCode)

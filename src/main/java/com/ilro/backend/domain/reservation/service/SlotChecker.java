@@ -19,6 +19,7 @@ public final class SlotChecker {
     }
 
     // destination: 방문 주소 좌표 - 모르면 null (앞뒤 이동을 봐야 하면 이동시간 모름, BE-10)
+    // travel이 지도 장애를 만나면 MapUnavailableException이 그대로 나감 (BE-10)
     // 바꾸려는 예약은 부르는 쪽이 day에서 뺌 (ScheduleDay.withoutVisit)
     public static SlotCheck check(ScheduleDay day, Instant start, int workMinutes, GeoPoint destination,
                                   Instant now, TravelTimes travel) {
