@@ -5,7 +5,7 @@ import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 
-// 예약·변경 오류 코드 (명세 3.5) - DB 제약·버전 충돌 대응(3.10)과 방문 가능 시간(BE-09)에 쓰는 것, 나머지는 BE-11·BE-12에서 추가
+// 예약·변경 오류 코드 (명세 3.5) - DB 제약·버전 충돌 대응(3.10)과 방문 가능 시간(BE-09·BE-10)에 쓰는 것, 나머지는 BE-11·BE-12에서 추가
 @Getter
 @RequiredArgsConstructor
 public enum ReservationErrorCode implements ErrorCode {
@@ -23,14 +23,20 @@ public enum ReservationErrorCode implements ErrorCode {
             "예약에 필요한 정보 확인이 더 필요해요. 사장님이 확인한 뒤 연락드려요"),
     SAFETY_CHECK_REQUIRED(HttpStatus.UNPROCESSABLE_CONTENT, "SAFETY_CHECK_REQUIRED",
             "안전 확인이 먼저 필요해요. 사장님이 확인한 뒤 연락드려요"),
-    // 서비스 지역 밖·주소 좌표가 없어 판별 불가
+    // 서비스 지역 밖·주소 좌표가 없음·지도가 판별할 수 없다고 답함 (지도 장애는 MAP_UNAVAILABLE)
     OUT_OF_SERVICE_AREA(HttpStatus.UNPROCESSABLE_CONTENT, "OUT_OF_SERVICE_AREA",
             "방문 지역 확인이 필요해요. 사장님이 확인한 뒤 연락드려요"),
-    // 이동시간 계산 불가 - 시간을 임의로 만들지 않음
+    // 이동시간 계산 불가 (좌표 없는 방문지·지도가 셀 수 없다고 답함) - 시간을 임의로 만들지 않음 (지도 장애는 MAP_UNAVAILABLE)
     TRAVEL_TIME_UNAVAILABLE(HttpStatus.UNPROCESSABLE_CONTENT, "TRAVEL_TIME_UNAVAILABLE",
             "이동 시간을 계산하지 못했어요. 사장님이 확인한 뒤 연락드려요"),
     // 사장님이 직접 응대 중이거나 이미 사장님 확인 단계 - 자동 예약 안 함 (명세에 없음, BE-09에서 추가)
     OWNER_HANDLING(HttpStatus.CONFLICT, "OWNER_HANDLING", "사장님이 확인하고 있는 상담이에요. 사장님이 연락드릴 거예요"),
+
+    // ---------- 잠시 후 다시 - 문의는 사장님 확인으로 넘기지 않고 그대로 ----------
+
+    // 지도 일시 장애 (오류·시간 초과·약속과 다른 값, MapUnavailableException) - 명세에 없음, BE-10 리뷰에서 추가
+    MAP_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "MAP_UNAVAILABLE",
+            "지금은 방문 시간을 확인할 수 없어요. 잠시 후 다시 시도해 주세요"),
 
     // ---------- 시간·예약 ----------
 
