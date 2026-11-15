@@ -77,13 +77,18 @@ public class KakaoAddressSearchClient implements AddressSearchClient {
         Map<String, Region> regions = new LinkedHashMap<>();
         for (Document doc : search(query, KAKAO_MAX_SIZE)) {
             KakaoAddress address = doc.address();
-            // 시도만 맞은 결과("경기")는 시군구가 없어서 뺌
-            if (address == null || address.bCode() == null || address.bCode().length() < 5
-                    || address.region2() == null || address.region2().isBlank()) {
+            if (address == null || address.bCode() == null || address.bCode().length() < 5) {
                 continue;
             }
             String code = address.bCode().substring(0, 5);
-            regions.putIfAbsent(code, new Region(code, address.region1() + " " + address.region2()));
+            boolean hasDistrict = address.region2() != null && !address.region2().isBlank();
+            // 시도만 맞은 결과("경기" 41000)는 시군구가 없어서 뺌
+            // 세종처럼 시군구 없이 시도 아래가 바로 동·읍면인 곳은 코드(36110)가 시군구 자리를 가져서 시도 이름으로 남김
+            if (!hasDistrict && code.endsWith("000")) {
+                continue;
+            }
+            String name = hasDistrict ? address.region1() + " " + address.region2() : address.region1();
+            regions.putIfAbsent(code, new Region(code, name));
         }
         return regions.values().stream().limit(size).toList();
     }
