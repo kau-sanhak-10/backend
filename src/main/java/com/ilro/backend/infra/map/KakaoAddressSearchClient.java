@@ -23,7 +23,7 @@ import java.util.Map;
 
 // 카카오 로컬 API로 주소·지역 검색 (dev·prod) - local·테스트는 FakeAddressSearchClient
 // 인증 헤더: Authorization: KakaoAK {REST API 키}
-// 장애(타임아웃·연결 실패·오류 응답)는 MapUnavailableException, 결과 없음은 빈 목록
+// 장애(타임아웃·연결 실패·오류 응답)는 MapApiException, 결과 없음은 빈 목록
 @Slf4j
 @Component
 @Profile({"dev", "prod"})
@@ -88,7 +88,7 @@ public class KakaoAddressSearchClient implements AddressSearchClient {
         return regions.values().stream().limit(size).toList();
     }
 
-    // 카카오 주소 검색 한 번 - 결과 없음은 빈 목록, 장애는 MapUnavailableException
+    // 카카오 주소 검색 한 번 - 결과 없음은 빈 목록, 장애는 MapApiException
     // 검색어(고객 주소)는 로그에 남기지 않음
     private List<Document> search(String query, int size) {
         try {
@@ -104,11 +104,11 @@ public class KakaoAddressSearchClient implements AddressSearchClient {
         } catch (RestClientResponseException e) {
             // 카카오가 오류로 응답 (키 문제 401·한도 초과 429·서버 오류 5xx 등)
             log.warn("카카오 주소 검색 오류 응답: status={}", e.getStatusCode().value());
-            throw new MapUnavailableException("카카오 주소 검색 오류 응답", e);
+            throw new MapApiException("카카오 주소 검색 오류 응답", e);
         } catch (RestClientException e) {
             // 타임아웃·연결 실패·응답 형식 오류
             log.warn("카카오 주소 검색 실패: {}", e.getClass().getSimpleName());
-            throw new MapUnavailableException("카카오 주소 검색 실패", e);
+            throw new MapApiException("카카오 주소 검색 실패", e);
         }
     }
 

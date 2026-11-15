@@ -4,7 +4,7 @@ import java.math.BigDecimal;
 import java.util.List;
 
 // 주소·지역 검색 (BE-15) - 고객 방문 주소·업체 출발지의 좌표, 사장님 서비스 지역 코드를 얻음
-// 검색 결과가 없으면 빈 목록 (오류 아님), 지도 장애·타임아웃은 MapUnavailableException
+// 검색 결과가 없으면 빈 목록 (오류 아님), 지도 장애·타임아웃은 MapApiException
 public interface AddressSearchClient {
 
     // 주소 검색 - 도로명·지번 주소와 좌표, 최대 size개
