@@ -6,12 +6,12 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 import java.util.OptionalInt;
 
-// 가짜 지도 - 로컬·개발 서버에서 방문 가능 시간 화면을 만들 수 있게 (실제 도로·지역 아님)
+// 가짜 지도 - 로컬·테스트에서 카카오 키 없이 방문 가능 시간 화면을 만들 수 있게 (실제 도로·지역 아님)
 // 이동시간: 두 좌표의 직선거리 × 1.3을 시속 30km로 달린 시간, 5분 단위로 올림 (같은 곳이면 0분)
 // 지역: 업체가 서비스 지역을 하나라도 정했으면 모두 지역 안으로 봄
-// 운영(prod)에서는 만들지 않음 - BE-15 실제 지도 연동 전까지는 UnavailableMapClient
+// dev·prod는 KakaoMapClient (BE-15)
 @Component
-@Profile("!prod")
+@Profile("!dev & !prod")
 public class FakeMapClient implements MapClient {
 
     private static final double EARTH_RADIUS_KM = 6371.0;

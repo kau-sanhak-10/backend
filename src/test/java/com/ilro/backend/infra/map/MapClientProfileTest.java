@@ -9,27 +9,33 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-// 운영(prod)에서 가짜 지도가 실제 고객 예약 시간을 만들지 않게 - BE-15 연동 전까지 운영은 '모름'만 답함
+// 지도 클라이언트 프로필 - dev·prod는 카카오(KakaoMapClient), local·테스트는 가짜 지도
+// 운영에서 가짜 지도가 실제 고객 예약 시간을 만들지 않게 확인
 class MapClientProfileTest {
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
-            .withUserConfiguration(FakeMapClient.class, UnavailableMapClient.class);
+            .withUserConfiguration(FakeMapClient.class, KakaoMapClient.class)
+            .withPropertyValues("app.kakao.local-base-url=https://dapi.kakao.com",
+                    "app.kakao.navi-base-url=https://apis-navi.kakaomobility.com");
 
     @Test
-    @DisplayName("prod는 UnavailableMapClient 하나 (이동시간 없음·지역 UNKNOWN), 그 밖의 프로필은 가짜 지도 하나")
+    @DisplayName("dev·prod는 카카오 지도 하나, 그 밖의 프로필은 가짜 지도 하나 - 운영에서 가짜 지도가 예약 시간을 만들지 않게")
     void clientByProfile() {
-        GeoPoint point = new GeoPoint(new BigDecimal("37.634"), new BigDecimal("126.832"));
-        runner.withPropertyValues("spring.profiles.active=prod").run(context -> {
-            assertThat(context).hasSingleBean(MapClient.class).hasSingleBean(UnavailableMapClient.class);
-            MapClient map = context.getBean(MapClient.class);
-            assertThat(map.carTravelMinutes(point, point)).isEmpty();
-            assertThat(map.matchServiceArea(point, List.of("41281"))).isEqualTo(ServiceAreaMatch.UNKNOWN);
-        });
-        for (String profile : List.of("local", "dev")) {
-            runner.withPropertyValues("spring.profiles.active=" + profile)
+        for (String profile : List.of("dev", "prod")) {
+            runner.withPropertyValues("spring.profiles.active=" + profile, "app.kakao.rest-api-key=test-key")
                     .run(context -> assertThat(context).hasSingleBean(MapClient.class)
-                            .hasSingleBean(FakeMapClient.class));
+                            .hasSingleBean(KakaoMapClient.class));
         }
+        runner.withPropertyValues("spring.profiles.active=local")
+                .run(context -> assertThat(context).hasSingleBean(MapClient.class)
+                        .hasSingleBean(FakeMapClient.class));
+    }
+
+    @Test
+    @DisplayName("dev·prod에서 카카오 키가 비어 있으면 서버가 뜨지 않음 - 배포 health에서 걸려 롤백")
+    void blankKeyFailsOnServer() {
+        runner.withPropertyValues("spring.profiles.active=prod", "app.kakao.rest-api-key=")
+                .run(context -> assertThat(context).hasFailed());
     }
 
     @Test

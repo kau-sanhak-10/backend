@@ -76,3 +76,5 @@ app:
     rest-api-key: ${KAKAO_REST_API_KEY:}
     # 카카오 로컬 API 주소 (주소·지역 검색 - 카카오 상품 이름, 우리 local 프로필과 무관)
     local-base-url: https://dapi.kakao.com
+    # 카카오모빌리티 자동차 길찾기 (이동시간) - 키는 위 REST API 키 그대로
+    navi-base-url: https://apis-navi.kakaomobility.com
