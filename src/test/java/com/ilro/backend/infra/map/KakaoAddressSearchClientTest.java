@@ -120,4 +120,20 @@ class KakaoAddressSearchClientTest {
         assertThatThrownBy(() -> new KakaoAddressSearchClient(RestClient.create(), " "))
                 .isInstanceOf(IllegalStateException.class);
     }
+
+    @Test
+    @DisplayName("지역 검색 - 시군구 없는 세종은 시도 이름으로 남김 (코드 36110), 시도만 맞은 결과(XX000)는 뺌")
+    void searchRegionSejong() {
+        server.expect(requestTo(startsWith(SEARCH_URL))).andRespond(withSuccess("""
+                {"documents": [
+                  {"address_name": "세종특별자치시 대평동", "address_type": "REGION", "x": "127.29", "y": "36.47",
+                   "address": {"address_name": "세종특별자치시 대평동", "region_1depth_name": "세종특별자치시",
+                               "region_2depth_name": "", "region_3depth_name": "대평동", "b_code": "3611010400"}},
+                  {"address_name": "세종특별자치시", "address_type": "REGION", "x": "127.28", "y": "36.48",
+                   "address": {"address_name": "세종특별자치시", "region_1depth_name": "세종특별자치시",
+                               "region_2depth_name": "", "region_3depth_name": "", "b_code": "3600000000"}}
+                ]}""", MediaType.APPLICATION_JSON));
+
+        assertThat(client.searchRegion("세종", 10)).containsExactly(new Region("36110", "세종특별자치시"));
+    }
 }
