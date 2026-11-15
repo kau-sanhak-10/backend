@@ -51,7 +51,7 @@ cp .env.example .env
 | `DB_USERNAME` | 로컬 DB 사용자 | `ilro` |
 | `DB_PASSWORD` | 로컬 DB 비밀번호 | `ilro` |
 | `CORS_ALLOWED_ORIGINS` | API를 호출할 수 있는 프론트 주소 (쉼표로 구분) | `http://localhost:3000,http://localhost:5173` |
-| `KAKAO_REST_API_KEY` | 카카오 REST API 키 (주소 → 좌표, 이동시간 조회) | 없음 · 팀원한테 요청 |
+| `KAKAO_REST_API_KEY` | 카카오 REST API 키 (주소·지역 검색, 이동시간 조회). `local`은 비워도 가짜 검색으로 실행 | 없음 · 팀원한테 요청 |
 
 - `DB_*` 기본값은 `docker-compose.yml`과 같아서 보통은 바꿀 필요가 없습니다
 
@@ -184,6 +184,12 @@ com.ilro.backend
 - 결과는 `SENT` / `FAILED`로 돌려주며 **예외를 던지지 않습니다**
 - `local`에서는 `LogSmsSender`가 실제 문자 대신 **콘솔에 로그로 출력**합니다 (전화번호는 가운데를 가림). 인증번호는 IntelliJ 콘솔에서 확인하세요
 - `dev`·`prod` 서버에서는 `RealSmsSender`가 **솔라피로 실제 문자를 보냅니다**. 키·발신번호는 Parameter Store(`/ilro/{dev,prod}/SOLAPI_API_KEY`·`SOLAPI_API_SECRET`·`SMS_SENDER_NUMBER`)에서 주입되고, 값이 비어 있으면 서버가 뜨지 않습니다
+
+**주소·지역 검색** — `AddressSearchClient`를 주입받아 `searchAddress(검색어, 개수)`·`searchRegion(검색어, 개수)`를 호출합니다.
+
+- 결과가 없으면 빈 목록, 카카오 장애·시간 초과는 `MapApiException`을 던집니다 (API 응답은 503 `MAP_UNAVAILABLE`)
+- `local`·테스트에서는 `FakeAddressSearchClient`가 정해 둔 몇 곳만 돌려줍니다 (카카오 키 불필요)
+- `dev`·`prod` 서버에서는 `KakaoAddressSearchClient`가 카카오 로컬 API를 부릅니다. 키는 Parameter Store(`/ilro/{dev,prod}/KAKAO_REST_API_KEY`)에서 주입되고, 값이 비어 있으면 서버가 뜨지 않습니다
 
 ## 더 자세한 가이드
 
