@@ -2,6 +2,7 @@ package com.ilro.backend.domain.auth.service;
 
 import com.ilro.backend.domain.admin.entity.Admin;
 import com.ilro.backend.domain.auth.entity.AuthToken;
+import com.ilro.backend.domain.auth.entity.AuthTokenScope;
 import com.ilro.backend.domain.auth.repository.AuthTokenRepository;
 import com.ilro.backend.domain.inquiry.entity.Inquiry;
 import com.ilro.backend.domain.owner.entity.Owner;
@@ -33,6 +34,8 @@ public class AuthTokenService {
     public static final Duration ADMIN_TOKEN_TTL = Duration.ofHours(12);
     // 상담 시작부터 24시간, 기기마다 따로 (명세 1.5)
     public static final Duration INQUIRY_TOKEN_TTL = Duration.ofHours(24);
+    // 상담 복구·예약 조회 고객 토큰 - 인증부터 24시간 (명세 1.5)
+    public static final Duration CUSTOMER_TOKEN_TTL = Duration.ofHours(24);
 
     // 마지막 사용 시각은 1분에 한 번만 기록 (요청마다 쓰지 않게)
     private static final Duration TOUCH_INTERVAL = Duration.ofMinutes(1);
@@ -63,6 +66,14 @@ public class AuthTokenService {
         String token = newToken("inq_");
         Instant expiresAt = clock.instant().plus(INQUIRY_TOKEN_TTL);
         authTokenRepository.save(AuthToken.inquiryToken(hash(token), inquiry, expiresAt));
+        return new IssuedToken(token, expiresAt);
+    }
+
+    // 고객 토큰 - 인증한 번호 + 그 업체 + 할 일(상담 복구·예약 조회)로만 쓰임 (BE-18)
+    public IssuedToken issueCustomerToken(Owner owner, String customerPhone, AuthTokenScope scope) {
+        String token = newToken("cus_");
+        Instant expiresAt = clock.instant().plus(CUSTOMER_TOKEN_TTL);
+        authTokenRepository.save(AuthToken.customerToken(hash(token), owner, customerPhone, scope, expiresAt));
         return new IssuedToken(token, expiresAt);
     }
 

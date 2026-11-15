@@ -5,13 +5,20 @@ import com.ilro.backend.domain.admin.repository.AdminRepository;
 import com.ilro.backend.domain.auth.dto.ConfirmVerificationResponse;
 import com.ilro.backend.domain.auth.dto.SendVerificationRequest;
 import com.ilro.backend.domain.auth.dto.SendVerificationResponse;
+import com.ilro.backend.domain.auth.entity.AuthTokenScope;
+import com.ilro.backend.domain.auth.entity.AuthTokenType;
 import com.ilro.backend.domain.auth.entity.PhoneVerification;
 import com.ilro.backend.domain.auth.entity.VerificationPurpose;
 import com.ilro.backend.domain.auth.entity.VerificationSendStatus;
 import com.ilro.backend.domain.auth.exception.AuthErrorCode;
 import com.ilro.backend.domain.auth.repository.PhoneVerificationRepository;
+import com.ilro.backend.domain.inquiry.entity.Inquiry;
+import com.ilro.backend.domain.inquiry.exception.InquiryErrorCode;
+import com.ilro.backend.domain.inquiry.repository.InquiryRepository;
+import com.ilro.backend.domain.inquiry.service.InquiryAccess;
 import com.ilro.backend.domain.owner.entity.Owner;
 import com.ilro.backend.domain.owner.repository.OwnerRepository;
+import com.ilro.backend.global.auth.AuthPrincipal;
 import com.ilro.backend.global.common.response.FieldErrorResponse;
 import com.ilro.backend.global.common.util.KstTime;
 import com.ilro.backend.global.common.util.PhoneNumbers;
@@ -33,7 +40,9 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
-// 6자리 문자 인증 (명세 5.1) - 지금은 사장님·운영자 로그인(BE-02), 고객 목적은 BE-18에서 추가
+// 6자리 문자 인증 (명세 5.1) - 사장님·운영자 로그인(BE-02), 고객 번호 확인·상담 복구·예약 조회(BE-18)
+// 목적마다 대상이 정해짐: 사장님 로그인은 그 업체, 예약 전 번호 확인은 문의 토큰의 문의, 상담 복구·예약 조회는 링크의 업체
+// 고객 인증으로는 사장님 토큰을 만들지 않고, 고객 토큰은 인증한 번호 + 그 업체 + 그 목적으로만 쓰임
 // 발송 실패·틀린 입력도 기록이 남아야 하므로(누적 제한·시도 횟수) 저장을 먼저 끝내고 트랜잭션 밖에서 오류를 던짐
 @Slf4j
 @Service
@@ -50,6 +59,8 @@ public class VerificationService {
 
     private final PhoneVerificationRepository verificationRepository;
     private final OwnerRepository ownerRepository;
+    private final InquiryRepository inquiryRepository;
+    private final InquiryAccess inquiryAccess;
     private final AdminRepository adminRepository;
     private final OwnerAccessPolicy ownerAccessPolicy;
     private final AuthTokenService authTokenService;
@@ -59,14 +70,18 @@ public class VerificationService {
     private final TransactionTemplate transactionTemplate;
     private final Clock clock;
 
-    public SendVerificationResponse send(SendVerificationRequest request, String requestIp) {
+    // inquiryToken: Authorization 헤더의 토큰 - 예약 전 번호 확인(CUSTOMER_VERIFY)에만 씀, 없으면 null
+    public SendVerificationResponse send(SendVerificationRequest request, String requestIp, String inquiryToken) {
         String phone = PhoneNumbers.normalize(request.phone());
         if (!PhoneNumbers.isMobile(phone)) {
             throw new BusinessException(CommonErrorCode.INVALID_INPUT,
                     List.of(new FieldErrorResponse("phone", "휴대전화번호 형식이 아닙니다")));
         }
+        // 문의 토큰·링크 확인은 발송 제한보다 먼저 - 토큰 없이 남의 문의로 문자를 보내지 못하게
+        Long inquiryId = request.purpose() == VerificationPurpose.CUSTOMER_VERIFY ? inquiryOf(inquiryToken) : null;
+        String linkToken = isLinkPurpose(request.purpose()) ? requireLinkToken(request.linkToken()) : null;
         PhoneVerification verification = transactionTemplate.execute(
-                status -> issue(request.purpose(), phone, requestIp));
+                status -> issue(request.purpose(), phone, requestIp, inquiryId, linkToken));
         if (verification.getSendStatus() == VerificationSendStatus.FAILED) {
             throw new BusinessException(AuthErrorCode.VERIFICATION_SEND_FAILED);
         }
@@ -82,22 +97,26 @@ public class VerificationService {
         return outcome.response();
     }
 
-    private PhoneVerification issue(VerificationPurpose purpose, String phone, String requestIp) {
+    private PhoneVerification issue(VerificationPurpose purpose, String phone, String requestIp, Long inquiryId,
+                                    String linkToken) {
         // 같은 번호로 동시에 들어온 요청이 둘 다 제한 검사를 통과하지 않게 번호 단위로 줄 세움
         jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", (RowCallbackHandler) rs -> {
         }, "phone_verification:" + phone);
         Instant now = clock.instant();
         checkSendLimits(purpose, phone, requestIp, now);
 
-        Owner targetOwner = switch (purpose) {
+        Target target = switch (purpose) {
             // 등록·승인된 업체 번호에만 보냄. 아니면 문자 없이 이유를 알려 줌 (명세 7.2 8번)
-            case OWNER_LOGIN -> ownerAccessPolicy.check(ownerRepository.findByPhone(phone)
-                    .orElseThrow(() -> new BusinessException(AuthErrorCode.OWNER_NOT_REGISTERED)));
+            case OWNER_LOGIN -> Target.owner(ownerAccessPolicy.check(ownerRepository.findByPhone(phone)
+                    .orElseThrow(() -> new BusinessException(AuthErrorCode.OWNER_NOT_REGISTERED))));
             case ADMIN_LOGIN -> {
                 adminRepository.findByPhone(phone)
                         .orElseThrow(() -> new BusinessException(CommonErrorCode.FORBIDDEN));
-                yield null;
+                yield Target.NONE;
             }
+            case CUSTOMER_VERIFY -> Target.inquiry(verifiableInquiry(inquiryId, phone));
+            // 이 번호의 문의·예약이 그 업체에 있는지는 보내기 전에 알려 주지 않음 (번호만으로 상담 여부를 알 수 없게)
+            case INQUIRY_ACCESS, RESERVATION_LOOKUP -> Target.owner(linkOwner(linkToken));
             default -> throw new BusinessException(CommonErrorCode.INVALID_INPUT,
                     List.of(new FieldErrorResponse("purpose", "아직 지원하지 않는 인증 목적입니다")));
         };
@@ -113,9 +132,51 @@ public class VerificationService {
                 .codeHash(verificationCodes.hash(phone, purpose, code))
                 .sendStatus(sendResult == SmsSendResult.SENT ? VerificationSendStatus.SENT : VerificationSendStatus.FAILED)
                 .expiresAt(now.plus(CODE_TTL))
-                .targetOwner(targetOwner)
+                .targetOwner(target.owner())
+                .targetInquiry(target.inquiry())
                 .requestIp(requestIp)
                 .build());
+    }
+
+    // 예약 전 번호 확인은 문의 토큰으로만 - 사장님·고객(cus_) 토큰은 403
+    private Long inquiryOf(String inquiryToken) {
+        AuthPrincipal principal = authTokenService.authenticate(inquiryToken);
+        if (principal.type() != AuthTokenType.INQUIRY) {
+            throw new BusinessException(CommonErrorCode.FORBIDDEN);
+        }
+        return principal.inquiryId();
+    }
+
+    private static boolean isLinkPurpose(VerificationPurpose purpose) {
+        return purpose == VerificationPurpose.INQUIRY_ACCESS || purpose == VerificationPurpose.RESERVATION_LOOKUP;
+    }
+
+    private static String requireLinkToken(String linkToken) {
+        if (linkToken == null || linkToken.isBlank()) {
+            throw new BusinessException(CommonErrorCode.INVALID_INPUT,
+                    List.of(new FieldErrorResponse("linkToken", "필수 값입니다")));
+        }
+        return linkToken;
+    }
+
+    // 그 문의의 방문정보 번호로만 보냄 - 종료 409·업체 이용 불가 403·필수 동의 없음 403
+    private Inquiry verifiableInquiry(Long inquiryId, String phone) {
+        Inquiry inquiry = inquiryRepository.findById(inquiryId)
+                .filter(found -> !found.isDeleted())
+                .orElseThrow(() -> new BusinessException(InquiryErrorCode.INQUIRY_NOT_FOUND));
+        inquiryAccess.checkWritable(inquiry);
+        if (inquiry.getCustomer() == null || !inquiry.getCustomer().getPhone().equals(phone)) {
+            throw new BusinessException(CommonErrorCode.INVALID_INPUT,
+                    List.of(new FieldErrorResponse("phone", "방문정보에 적은 휴대전화번호로 인증해 주세요")));
+        }
+        return inquiry;
+    }
+
+    // 접수 링크의 업체 - 없거나 승인 전·탈퇴면 404 (이용 제한 중이어도 지난 상담·예약은 볼 수 있게 보냄)
+    private Owner linkOwner(String linkToken) {
+        return ownerRepository.findByLinkToken(linkToken)
+                .filter(Owner::isIntakeLinkValid)
+                .orElseThrow(() -> new BusinessException(InquiryErrorCode.INTAKE_LINK_INVALID));
     }
 
     private void checkSendLimits(VerificationPurpose purpose, String phone, String requestIp, Instant now) {
@@ -175,11 +236,12 @@ public class VerificationService {
                     : new BusinessException(AuthErrorCode.VERIFICATION_ATTEMPTS_EXCEEDED));
         }
         verification.markVerified(now);
-        return ConfirmOutcome.succeeded(login(verification));
+        return ConfirmOutcome.succeeded(result(verification, now));
     }
 
     // 고객 인증으로는 절대 사장님 토큰을 발급하지 않음 - 목적별로만 발급
-    private ConfirmVerificationResponse login(PhoneVerification verification) {
+    // 여기서 오류를 던지면 인증 성공 기록도 되돌아가 같은 인증번호로 다시 확인할 수 있음
+    private ConfirmVerificationResponse result(PhoneVerification verification, Instant now) {
         return switch (verification.getPurpose()) {
             case OWNER_LOGIN -> {
                 // 보낸 뒤 로그인 번호가 바뀌었거나 이용 제한이 됐으면 로그인하지 않음
@@ -195,13 +257,54 @@ public class VerificationService {
                         .orElseThrow(() -> new BusinessException(CommonErrorCode.FORBIDDEN));
                 yield ConfirmVerificationResponse.adminLogin(authTokenService.issueAdminToken(admin), admin);
             }
+            case CUSTOMER_VERIFY -> {
+                Inquiry inquiry = markPhoneVerified(verification, now);
+                yield ConfirmVerificationResponse.customerVerified(inquiry.getId(), now);
+            }
+            case INQUIRY_ACCESS, RESERVATION_LOOKUP -> {
+                Owner owner = verification.getTargetOwner();
+                if (owner == null || !owner.isIntakeLinkValid()) {
+                    throw new BusinessException(InquiryErrorCode.INTAKE_LINK_INVALID);
+                }
+                AuthTokenScope scope = AuthTokenScope.valueOf(verification.getPurpose().name());
+                yield ConfirmVerificationResponse.customerToken(verification.getPurpose(),
+                        authTokenService.issueCustomerToken(owner, verification.getPhone(), scope));
+            }
             default -> throw new BusinessException(AuthErrorCode.VERIFICATION_NOT_FOUND);
         };
+    }
+
+    // 문의 행을 잠근 뒤 기록 - 보낸 뒤 방문정보 번호가 바뀌었으면 이 인증은 그 문의에 쓸 수 없음
+    // 방문정보 저장(VisitInfoWriter)도 같은 행 잠금이라, 번호를 바꾸는 저장과 섞이지 않음
+    private Inquiry markPhoneVerified(PhoneVerification verification, Instant now) {
+        Inquiry inquiry = inquiryRepository.findByIdForUpdate(verification.getTargetInquiry().getId())
+                .filter(found -> !found.isDeleted())
+                .orElseThrow(() -> new BusinessException(InquiryErrorCode.INQUIRY_NOT_FOUND));
+        inquiryAccess.checkOpen(inquiry);
+        if (inquiry.getCustomer() == null || !inquiry.getCustomer().getPhone().equals(verification.getPhone())) {
+            throw new BusinessException(AuthErrorCode.VERIFICATION_PURPOSE_MISMATCH);
+        }
+        inquiry.markPhoneVerified(now);
+        return inquiry;
     }
 
     private static RetryAfter retryAfter(Duration wait) {
         long seconds = wait.toSeconds() + (wait.toNanosPart() > 0 ? 1 : 0);
         return new RetryAfter(Math.max(1, seconds));
+    }
+
+    // 인증 대상 - 업체 또는 문의 (운영자 로그인은 없음)
+    private record Target(Owner owner, Inquiry inquiry) {
+
+        static final Target NONE = new Target(null, null);
+
+        static Target owner(Owner owner) {
+            return new Target(owner, null);
+        }
+
+        static Target inquiry(Inquiry inquiry) {
+            return new Target(null, inquiry);
+        }
     }
 
     // 확인 결과 - 틀린 입력은 시도 횟수를 저장한 뒤 오류로 돌려줌

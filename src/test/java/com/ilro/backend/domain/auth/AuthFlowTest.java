@@ -376,7 +376,7 @@ class AuthFlowTest {
     @Test
     @DisplayName("아직 없는 인증 목적·모르는 목적 값·6자리가 아닌 번호는 400")
     void unsupportedInputs() throws Exception {
-        sendCode("CUSTOMER_VERIFY", accounts.newPhone())
+        sendCode("OWNER_SIGNUP", accounts.newPhone())
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("INVALID_INPUT"))
                 .andExpect(jsonPath("$.result[0].field").value("purpose"));
