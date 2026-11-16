@@ -2,6 +2,7 @@ package com.ilro.backend.domain.reservation.controller;
 
 import com.ilro.backend.domain.reservation.dto.ChangeAcceptRequest;
 import com.ilro.backend.domain.reservation.dto.ChangeAcceptResponse;
+import com.ilro.backend.domain.reservation.dto.ChangeHistoryResponse;
 import com.ilro.backend.domain.reservation.dto.ChangeRequestRequest;
 import com.ilro.backend.domain.reservation.dto.ChangeSnapshot;
 import com.ilro.backend.domain.reservation.dto.CustomerReservationDetailResponse;
@@ -24,7 +25,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-// 고객 예약 조회·변경·취소 (명세 4.3·5.3·5.4, BE-11·BE-12) - 문의 토큰이면 그 문의의 예약만, 남의 예약은 404
+// 고객 예약 조회·변경·취소 (명세 4.3·5.3·5.4, BE-11·BE-12·BE-16) - 문의 토큰이면 그 문의의 예약만, 남의 예약은 404
 @RestController
 @RequestMapping("/api/v1/customer/reservations")
 @RequiredArgsConstructor
@@ -45,6 +46,12 @@ public class CustomerReservationController {
     public ApiResponse<CustomerReservationDetailResponse> detail(AuthPrincipal principal,
                                                                  @PathVariable Long reservationId) {
         return ApiResponse.onSuccess(customerReservationService.detail(principal, reservationId));
+    }
+
+    // C-17 변경 요청·제안 이력 - 기존·제안 시간·주소와 기한, 끝난 변경도 포함 (최근 순, BE-16)
+    @GetMapping("/{reservationId}/changes")
+    public ApiResponse<ChangeHistoryResponse> changes(AuthPrincipal principal, @PathVariable Long reservationId) {
+        return ApiResponse.onSuccess(customerReservationService.changes(principal, reservationId));
     }
 
     // C-15 변경 요청 - 희망 일시·사유는 requestNote에, 주소 변경은 addressChange (예약은 아직 그대로)

@@ -1,5 +1,7 @@
 package com.ilro.backend.domain.reservation.service;
 
+import com.ilro.backend.domain.reservation.dto.ChangeHistoryResponse;
+import com.ilro.backend.domain.reservation.dto.ChangeView;
 import com.ilro.backend.domain.reservation.dto.CustomerReservationDetailResponse;
 import com.ilro.backend.domain.reservation.dto.CustomerReservationsResponse;
 import com.ilro.backend.domain.reservation.entity.Reservation;
@@ -28,6 +30,9 @@ public class CustomerReservationService {
     // 한 번에 보여 줄 예약 수 - 방문일이 늦은 것부터
     static final int MAX_RESERVATIONS = 50;
 
+    // 변경 이력은 최근 것부터 이만큼 - 한 예약의 변경은 많지 않음
+    static final int MAX_CHANGES = 50;
+
     static final Set<ReservationChangeStatus> ACTIVE_CHANGE = EnumSet.of(
             ReservationChangeStatus.REQUESTED, ReservationChangeStatus.PROPOSED, ReservationChangeStatus.ACCEPTED);
 
@@ -52,5 +57,16 @@ public class CustomerReservationService {
                 .orElse(null);
         AccessLog.record(principal, "VIEW", "reservation", reservationId);
         return CustomerReservationDetailResponse.of(reservation, activeChange);
+    }
+
+    // 변경 요청·제안 이력 (C-17) - 상세와 같은 권한 (남의 예약은 404)
+    @Transactional(readOnly = true)
+    public ChangeHistoryResponse changes(AuthPrincipal principal, Long reservationId) {
+        access.find(principal, reservationId);
+        List<ChangeView> changes = changeRepository
+                .findByReservationIdOrderByCreatedAtDescIdDesc(reservationId, PageRequest.of(0, MAX_CHANGES))
+                .stream().map(ChangeView::from).toList();
+        AccessLog.record(principal, "VIEW", "reservation", reservationId);
+        return new ChangeHistoryResponse(reservationId, changes);
     }
 }

@@ -151,6 +151,12 @@ public class Owner extends BaseTimeEntity {
         this.travelMode = travelMode;
     }
 
+    // 사장님 탈퇴 (B-04, BE-16) - 고객 예약·문의 기록은 그대로, 로그인·접수 링크·자동 예약은 막힘
+    public void withdraw() {
+        this.status = OwnerStatus.WITHDRAWN;
+        this.autoBookingEnabled = false;
+    }
+
     public void changeAutoBooking(boolean enabled) {
         this.autoBookingEnabled = enabled;
     }
