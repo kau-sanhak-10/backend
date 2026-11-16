@@ -26,6 +26,7 @@ public class CustomerBookingController {
 
     // C-12 방문 가능 시간 후보 - from(기본 오늘, yyyy-MM-dd)부터 days일(기본 3, 최대 14)
     // 자동 예약 조건이 안 맞으면 422 + 문의는 사장님 확인 (명세 3.5)
+    // 지도 일시 장애면 503 MAP_UNAVAILABLE - 문의는 그대로, 잠시 후 다시 부르면 됨
     @GetMapping("/available-slots")
     public ApiResponse<AvailableSlotsResponse> availableSlots(
             AuthPrincipal principal, @PathVariable Long inquiryId,
