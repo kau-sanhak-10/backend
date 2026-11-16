@@ -42,6 +42,12 @@ public class OwnerBlock {
     @Column(length = 100)
     private String reason;
 
+    public void update(Instant startAt, Instant endAt, String reason) {
+        this.startAt = startAt;
+        this.endAt = endAt;
+        this.reason = reason;
+    }
+
     @Builder
     private OwnerBlock(Owner owner, Instant startAt, Instant endAt, String reason) {
         this.owner = owner;

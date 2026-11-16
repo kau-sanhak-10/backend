@@ -52,6 +52,13 @@ public record ScheduleDay(LocalDate date, LocalTime open, LocalTime close, Local
                 .count();
     }
 
+    // 영업시간을 하루 전체(00:00~24:00)로 본 하루 - 사장님이 영업시간 밖 경고를 확인한 수동 예약 (BE-12, 명세 7.2 결정 7)
+    // 점심·차단·하루 한도·겹침·이동은 그대로 봄
+    public ScheduleDay withAllDayHours() {
+        return new ScheduleDay(date, LocalTime.MIN, LocalTime.MAX, lunchStart, lunchEnd, maxDailyVisits, bufferMinutes,
+                origin, blocks, visits);
+    }
+
     // 바꾸려는 예약을 뺀 하루 - 예약 변경(B-19)에서 자기 예약은 겹침·하루 한도·앞뒤 방문에 넣지 않음 (명세 5.3)
     public ScheduleDay withoutVisit(Long reservationId) {
         return new ScheduleDay(date, open, close, lunchStart, lunchEnd, maxDailyVisits, bufferMinutes, origin, blocks,

@@ -6,7 +6,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 
 // 예약·변경 오류 코드 (명세 3.5) - DB 제약·버전 충돌 대응(3.10), 방문 가능 시간(BE-09·BE-10), 예약 확정·조회(BE-11)
-// 변경·취소 코드는 BE-12·BE-16에서 추가
+// 변경·취소·차단 시간 코드는 BE-12
 @Getter
 @RequiredArgsConstructor
 public enum ReservationErrorCode implements ErrorCode {
@@ -49,8 +49,29 @@ public enum ReservationErrorCode implements ErrorCode {
     RESERVATION_ALREADY_EXISTS(HttpStatus.CONFLICT, "RESERVATION_ALREADY_EXISTS", "이 문의에는 이미 예약이 있어요"),
     // result: reservation (최신)
     RESERVATION_VERSION_CONFLICT(HttpStatus.CONFLICT, "RESERVATION_VERSION_CONFLICT", "다른 곳에서 예약이 먼저 바뀌었어요. 최신 내용을 확인해 주세요"),
+    // result: status - 취소·완료 예약은 시간·주소를 바꾸지 않음 (BE-12)
+    RESERVATION_NOT_CHANGEABLE(HttpStatus.CONFLICT, "RESERVATION_NOT_CHANGEABLE", "취소되었거나 작업이 끝난 예약은 바꿀 수 없어요"),
+    // result: contactPhone - 완료 예약은 화면에서 취소하지 않고 업체에 문의 (BE-12)
+    RESERVATION_COMPLETED(HttpStatus.CONFLICT, "RESERVATION_COMPLETED", "작업이 끝난 예약이에요. 업체에 문의해 주세요"),
+
+    // ---------- 예약 변경 (명세 5.3, BE-12) ----------
+
     // result: change
-    CHANGE_IN_PROGRESS(HttpStatus.CONFLICT, "CHANGE_IN_PROGRESS", "진행 중인 변경 요청이 이미 있어요");
+    CHANGE_IN_PROGRESS(HttpStatus.CONFLICT, "CHANGE_IN_PROGRESS", "진행 중인 변경 요청이 이미 있어요"),
+    // 없거나 볼 수 없는 변경 요청 - 있다는 사실도 숨김
+    CHANGE_NOT_FOUND(HttpStatus.NOT_FOUND, "CHANGE_NOT_FOUND", "변경 요청을 찾을 수 없어요"),
+    // result: change - 사장님이 시간을 제안하기 전(REQUESTED)에 수락·거절
+    CHANGE_NOT_PROPOSED(HttpStatus.CONFLICT, "CHANGE_NOT_PROPOSED", "아직 사장님이 시간을 제안하지 않았어요"),
+    // result: change - 이미 끝난 요청·제안 (확정·거절·실패·만료·종료)
+    CHANGE_ALREADY_RESOLVED(HttpStatus.CONFLICT, "CHANGE_ALREADY_RESOLVED", "이미 처리가 끝난 변경 요청이에요"),
+    // result: change - 제안 기한이 지나 EXPIRED로 바뀜, 기존 예약 유지
+    CHANGE_EXPIRED(HttpStatus.CONFLICT, "CHANGE_EXPIRED", "제안 시간이 지났어요. 기존 예약은 그대로예요"),
+
+    // ---------- 차단 시간 (명세 4.6, BE-12) ----------
+
+    // result: reservations (겹친 확정 예약) - acknowledgeConflicts: true로 다시 보내면 저장, 예약은 그대로
+    BLOCK_CONFLICTS_RESERVATION(HttpStatus.CONFLICT, "BLOCK_CONFLICTS_RESERVATION", "이 시간에 잡힌 예약이 있어요. 확인 후 다시 저장해 주세요"),
+    BLOCK_NOT_FOUND(HttpStatus.NOT_FOUND, "BLOCK_NOT_FOUND", "차단 시간을 찾을 수 없어요");
 
     private final HttpStatus status;
     private final String code;
