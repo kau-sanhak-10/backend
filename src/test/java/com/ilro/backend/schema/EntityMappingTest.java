@@ -100,7 +100,7 @@ class EntityMappingTest {
                 .map(entity -> entity.getJavaType().getAnnotation(Table.class).name())
                 .collect(Collectors.toList());
 
-        assertThat(entityTables).hasSize(23).containsExactlyInAnyOrderElementsOf(tables);
+        assertThat(entityTables).hasSize(26).containsExactlyInAnyOrderElementsOf(tables);
     }
 
     @Test

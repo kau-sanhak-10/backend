@@ -42,14 +42,14 @@ class MigrationUpgradeTest {
     void migratesEmptyDatabase() {
         flyway(null).migrate();
 
-        assertThat(currentVersion()).isEqualTo("3");
+        assertThat(currentVersion()).isEqualTo("4");
         assertThat(jdbc.queryForObject(
                 "SELECT count(*) FROM information_schema.tables WHERE table_schema = ? AND table_name <> "
-                        + "'flyway_schema_history'", Integer.class, SCHEMA)).isEqualTo(23);
+                        + "'flyway_schema_history'", Integer.class, SCHEMA)).isEqualTo(26);
     }
 
     @Test
-    @DisplayName("V1 데이터가 있는 DB도 V2·V3로 올라가고, 기존 토큰·요청 키·변경 요청·작업 설정을 규칙대로 옮긴다")
+    @DisplayName("V1 데이터가 있는 DB도 V2~V4로 올라가고, 기존 토큰·요청 키·변경 요청·작업 설정을 규칙대로 옮긴다")
     void migratesV1Data() {
         flyway("1").migrate();
         Instant now = Instant.now();
@@ -84,7 +84,7 @@ class MigrationUpgradeTest {
 
         flyway(null).migrate();
 
-        assertThat(currentVersion()).isEqualTo("3");
+        assertThat(currentVersion()).isEqualTo("4");
         // V3: 기존 문의는 방문정보를 누가 정했는지 기록이 없음 (고객 값으로 봄)
         assertThat(jdbc.queryForObject("SELECT count(*) FROM " + S + "inquiry WHERE visit_info_source IS NOT NULL",
                 Integer.class)).isZero();
