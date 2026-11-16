@@ -40,7 +40,18 @@ public class BookingEligibility {
     public record Block(ReservationErrorCode code, Object result) {
     }
 
+    // 서비스 지역 판별 - 보통은 지도(MapLookup), 예약 확정(BE-11)은 잠근 뒤 잠그기 전 답을 다시 씀
+    @FunctionalInterface
+    public interface ServiceAreaJudge {
+
+        ServiceAreaMatch match(GeoPoint point, List<String> regionCodes);
+    }
+
     public Optional<Block> check(Inquiry inquiry) {
+        return check(inquiry, mapLookup::serviceArea);
+    }
+
+    public Optional<Block> check(Inquiry inquiry, ServiceAreaJudge serviceArea) {
         Owner owner = inquiry.getOwner();
         // 1. 업체 - 승인·이용 상태는 문의 쓰기 확인(InquiryAccess.checkWritable)에서 403
         //    신규 접수 중지 중에는 진행 중 상담은 이어가되 새 방문 시간은 사장님이 정함
@@ -71,7 +82,7 @@ public class BookingEligibility {
                 .map(OwnerServiceArea::getRegionCode)
                 .toList();
         if (destination.isEmpty() || regionCodes.isEmpty()
-                || mapLookup.serviceArea(destination.get(), regionCodes) != ServiceAreaMatch.INSIDE) {
+                || serviceArea.match(destination.get(), regionCodes) != ServiceAreaMatch.INSIDE) {
             return block(ReservationErrorCode.OUT_OF_SERVICE_AREA);
         }
         return Optional.empty();

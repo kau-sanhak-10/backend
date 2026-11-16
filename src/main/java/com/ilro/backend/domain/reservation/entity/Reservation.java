@@ -96,11 +96,15 @@ public class Reservation extends BaseTimeEntity {
     @Column(nullable = false)
     private Integer version;
 
+    // status를 주지 않으면 REQUESTED - 고객 예약 확정(BE-11)·수동 예약(BE-12)은 처음부터 CONFIRMED
     @Builder
     private Reservation(Inquiry inquiry, Owner owner, Customer customer, Instant startAt, Instant endAt,
                         String address, BigDecimal lat, BigDecimal lng, OwnerWorkType workType,
                         Integer travelTimeMinutes, Integer workMinutes, Integer bufferMinutes, boolean isManual,
-                        String idempotencyKey, String idempotencyHash) {
+                        String idempotencyKey, String idempotencyHash, ReservationStatus status) {
+        if (status != null) {
+            this.status = status;
+        }
         this.inquiry = inquiry;
         this.owner = owner;
         this.customer = customer;

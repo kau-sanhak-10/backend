@@ -80,6 +80,11 @@ public class TestAccounts {
         for (Long ownerId : ownerIds) {
             jdbc.update("DELETE FROM auth_token WHERE owner_id = ?", ownerId);
             jdbc.update("DELETE FROM phone_verification WHERE target_owner_id = ?", ownerId);
+            // 예약 - 자식 행부터 (변경·이력·작업 메모)
+            String reservations = "(SELECT id FROM reservation WHERE owner_id = ?)";
+            jdbc.update("DELETE FROM reservation_history WHERE reservation_id IN " + reservations, ownerId);
+            jdbc.update("DELETE FROM reservation_change WHERE reservation_id IN " + reservations, ownerId);
+            jdbc.update("DELETE FROM work_note WHERE reservation_id IN " + reservations, ownerId);
             jdbc.update("DELETE FROM reservation WHERE owner_id = ?", ownerId);
             // 고객 상담 - 자식 행부터
             String inquiries = "(SELECT id FROM inquiry WHERE owner_id = ?)";

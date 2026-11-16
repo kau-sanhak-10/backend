@@ -32,12 +32,23 @@ public class VisitScheduleService {
     // 지도 장애면 MapUnavailableException (503 '잠시 후 다시') - 문의·예약 상태를 바꾸지 않고 끝냄
     public SlotCheck check(Owner owner, Instant startAt, int workMinutes, GeoPoint destination,
                            Long excludeReservationId) {
+        return check(owner, startAt, workMinutes, destination, excludeReservationId, mapLookup.newRequest());
+    }
+
+    // 이동시간 묻는 곳을 정해서 검사 - 예약 확정(BE-11)은 잠그기 전 검사에서 물은 구간을 잠근 뒤 다시 씀 (TravelTimes.askedOnly)
+    public SlotCheck check(Owner owner, Instant startAt, int workMinutes, GeoPoint destination,
+                           Long excludeReservationId, TravelTimes travel) {
         LocalDate date = startAt.atZone(KstTime.ZONE).toLocalDate();
         ScheduleDay day = scheduleReader.read(owner, date, date.plusDays(1)).get(date);
         if (excludeReservationId != null) {
             day = day.withoutVisit(excludeReservationId);
         }
-        return SlotChecker.check(day, startAt, workMinutes, destination, clock.instant(), mapLookup.newRequest());
+        return SlotChecker.check(day, startAt, workMinutes, destination, clock.instant(), travel);
+    }
+
+    // 한 요청에서 쓸 이동시간 - 같은 구간은 한 번만 지도에 물음
+    public TravelTimes newTravelRequest() {
+        return mapLookup.newRequest();
     }
 
     // 기간(한국 날짜 [from, to))의 날짜별 일정 - 방문마다 이동·여유·작업시간을 나눠서 (B-28 표시, 조회 API는 BE-12)

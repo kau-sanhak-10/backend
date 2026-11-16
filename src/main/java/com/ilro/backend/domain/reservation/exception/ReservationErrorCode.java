@@ -5,7 +5,8 @@ import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 
-// 예약·변경 오류 코드 (명세 3.5) - DB 제약·버전 충돌 대응(3.10)과 방문 가능 시간(BE-09·BE-10)에 쓰는 것, 나머지는 BE-11·BE-12에서 추가
+// 예약·변경 오류 코드 (명세 3.5) - DB 제약·버전 충돌 대응(3.10), 방문 가능 시간(BE-09·BE-10), 예약 확정·조회(BE-11)
+// 변경·취소 코드는 BE-12·BE-16에서 추가
 @Getter
 @RequiredArgsConstructor
 public enum ReservationErrorCode implements ErrorCode {
@@ -42,6 +43,8 @@ public enum ReservationErrorCode implements ErrorCode {
 
     // result: reason (SlotUnavailableReason)
     SLOT_UNAVAILABLE(HttpStatus.CONFLICT, "SLOT_UNAVAILABLE", "선택한 시간은 예약할 수 없어요. 다른 시간을 골라 주세요"),
+    // 없거나 볼 수 없는 예약 (다른 번호·다른 업체·다른 문의) - 있다는 사실도 숨김
+    RESERVATION_NOT_FOUND(HttpStatus.NOT_FOUND, "RESERVATION_NOT_FOUND", "예약을 찾을 수 없어요"),
     // result: reservationId
     RESERVATION_ALREADY_EXISTS(HttpStatus.CONFLICT, "RESERVATION_ALREADY_EXISTS", "이 문의에는 이미 예약이 있어요"),
     // result: reservation (최신)
