@@ -159,4 +159,10 @@ public class ReservationChange extends BaseCreatedEntity {
         this.expiresAt = expiresAt;
         this.baseVersion = baseVersion;
     }
+
+    // 답할 기한이 지난 제안 - 저장된 상태가 아직 PROPOSED여도 고객 화면에 진행 중으로 보여 주지 않음
+    // (상태를 EXPIRED로 바꾸는 것은 수락할 때와 만료 작업)
+    public boolean isExpiredProposal(Instant now) {
+        return status == ReservationChangeStatus.PROPOSED && (expiresAt == null || !expiresAt.isAfter(now));
+    }
 }
