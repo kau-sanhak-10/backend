@@ -19,6 +19,8 @@ import java.util.regex.Pattern;
 //   모델은 매뉴얼 규격표의 모델명(official_manual_model)과 비교용 키가 같아야 함 - 비슷한 모델·줄 이름만으로는 맞다고 보지 않음
 // 매뉴얼 내용을 그대로 돌려줄 뿐 진단·수리 안내로 바꾸지 않음
 // 조회 실패도 미확인으로 돌려줌 - 따로 읽기 트랜잭션에서 읽어서, 실패해도 상세 조회·사장님 수정 트랜잭션은 그대로
+// 다른 트랜잭션 안에서 부르지 말 것 - 따로 읽는 트랜잭션이 DB 연결을 하나 더 잡아서, 동시 요청이 몰리면
+//   연결이 바닥나 서로 기다림. 문의 상세는 문의 트랜잭션이 끝난 뒤에 부름 (OfficialErrorCodeAttacher)
 @Slf4j
 @Service
 public class OfficialErrorCodeLookup {

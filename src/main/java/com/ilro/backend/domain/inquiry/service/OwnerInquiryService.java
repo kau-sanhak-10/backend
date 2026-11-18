@@ -4,8 +4,6 @@ import com.ilro.backend.domain.ai.entity.AiDecision;
 import com.ilro.backend.domain.ai.entity.AiDecisionStatus;
 import com.ilro.backend.domain.ai.entity.AiStage;
 import com.ilro.backend.domain.ai.repository.AiDecisionRepository;
-import com.ilro.backend.domain.boiler.dto.OfficialErrorCodeResponse;
-import com.ilro.backend.domain.boiler.service.OfficialErrorCodeLookup;
 import com.ilro.backend.domain.inquiry.dto.OwnerHomeResponse;
 import com.ilro.backend.domain.inquiry.dto.OwnerHomeResponse.TodayVisit;
 import com.ilro.backend.domain.inquiry.dto.OwnerInquiryDetailResponse;
@@ -21,7 +19,6 @@ import com.ilro.backend.domain.inquiry.entity.HandoffRequest;
 import com.ilro.backend.domain.inquiry.entity.HandoffStatus;
 import com.ilro.backend.domain.inquiry.entity.Inquiry;
 import com.ilro.backend.domain.inquiry.entity.InquiryFieldKey;
-import com.ilro.backend.domain.inquiry.entity.InquiryFieldStatus;
 import com.ilro.backend.domain.inquiry.entity.InquiryStatus;
 import com.ilro.backend.domain.inquiry.entity.Message;
 import com.ilro.backend.domain.inquiry.entity.PhotoUploadStatus;
@@ -85,7 +82,6 @@ public class OwnerInquiryService {
     private final HandoffRequestRepository handoffRepository;
     private final ConsentRepository consentRepository;
     private final AiDecisionRepository aiDecisionRepository;
-    private final OfficialErrorCodeLookup officialErrorCodeLookup;
     private final ReservationRepository reservationRepository;
     private final NotificationRepository notificationRepository;
     private final JsonMapper jsonMapper;
@@ -201,29 +197,13 @@ public class OwnerInquiryService {
                 .distinct()
                 .toList();
         List<FieldDetail> fields = OwnerInquiryDetailResponse.fieldDetails(fieldRepository.findAllOf(inquiryId));
-        return OwnerInquiryDetailResponse.of(inquiry, fields, aiSummary(inquiry, decision), officialErrorCode(fields),
+        // 오류코드 공식 설명(AI-14)은 여기서 붙이지 않음 - 이 트랜잭션이 끝난 뒤 컨트롤러에서 (OfficialErrorCodeAttacher)
+        return OwnerInquiryDetailResponse.of(inquiry, fields, aiSummary(inquiry, decision),
                 photoRepository.findByInquiryIdAndUploadStatusAndMessageIsNotNullOrderByIdAsc(
                         inquiryId, PhotoUploadStatus.DONE),
                 handoffRepository.findByInquiryIdOrderByIdDesc(inquiryId),
                 reservationRepository.findByInquiryIdAndStatusNot(inquiryId, ReservationStatus.CANCELED).orElse(null),
                 consents, !fieldService.findRequiredWaitingOwner(List.of(inquiryId)).isEmpty());
-    }
-
-    // 오류코드 공식 설명 (AI-14) - 오류코드 값이 있는 문의만, 확인된(CONFIRMED) 제조사·모델·오류코드로 찾음
-    // 미확인·충돌·추정 값은 넘기지 않음 → '공식 설명 미확인', 문의·예약은 그대로
-    private OfficialErrorCodeResponse officialErrorCode(List<FieldDetail> fields) {
-        Map<String, FieldDetail> byKey = fields.stream()
-                .collect(Collectors.toMap(FieldDetail::fieldKey, Function.identity()));
-        FieldDetail errorCode = byKey.get(InquiryFieldKey.ERROR_CODE.getKey());
-        if (errorCode == null || errorCode.value() == null) {
-            return null;
-        }
-        return officialErrorCodeLookup.find(confirmedValue(byKey.get(InquiryFieldKey.MANUFACTURER.getKey())),
-                confirmedValue(byKey.get(InquiryFieldKey.MODEL.getKey())), confirmedValue(errorCode));
-    }
-
-    private static String confirmedValue(FieldDetail field) {
-        return field != null && field.status() == InquiryFieldStatus.CONFIRMED ? field.value() : null;
     }
 
     // 해석은 적용된 마지막 AI 판단의 원본 응답(result)에서 꺼냄 - 사실(항목 값)과 섞지 않음

@@ -71,9 +71,16 @@ public record OwnerInquiryDetailResponse(Long inquiryId, InquiryStatus status, H
         }
     }
 
+    // 공식 설명은 문의 트랜잭션이 끝난 뒤에 붙임 (OfficialErrorCodeAttacher)
+    public OwnerInquiryDetailResponse withOfficialErrorCode(OfficialErrorCodeResponse official) {
+        return new OwnerInquiryDetailResponse(inquiryId, status, handlerMode, safetyFlag, ownerCheckReason, version,
+                visitInfo, phoneVerified, fields, aiSummary, official, photos, handoffRequests, reservation,
+                consents, createdAt, updatedAt);
+    }
+
     // fields: fieldDetails(이 문의의 항목 행 전부)로 만든 것, handoffs: 최근 것부터
+    // officialErrorCode는 비워 둠 - 트랜잭션 밖에서 withOfficialErrorCode로 채움
     public static OwnerInquiryDetailResponse of(Inquiry inquiry, List<FieldDetail> fields, AiSummary aiSummary,
-                                                OfficialErrorCodeResponse officialErrorCode,
                                                 List<Photo> photos, List<HandoffRequest> handoffs,
                                                 Reservation reservation, List<ConsentType> consents,
                                                 boolean requiredWaitingOwner) {
@@ -86,7 +93,7 @@ public record OwnerInquiryDetailResponse(Long inquiryId, InquiryStatus status, H
         return new OwnerInquiryDetailResponse(inquiry.getId(), inquiry.getStatus(), inquiry.getHandlerMode(),
                 inquiry.isSafetyFlag(), OwnerCheckReason.of(inquiry, activeHandoff, requiredWaitingOwner),
                 inquiry.getVersion(), visitInfo, inquiry.getPhoneVerifiedAt() != null,
-                fields, aiSummary, officialErrorCode, photos.stream().map(PhotoItem::from).toList(),
+                fields, aiSummary, null, photos.stream().map(PhotoItem::from).toList(),
                 handoffs.stream().map(OwnerHandoffResponse::from).toList(), LinkedReservation.from(reservation),
                 consents, KstTime.of(inquiry.getCreatedAt()), KstTime.of(inquiry.getUpdatedAt()));
     }

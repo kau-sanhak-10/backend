@@ -12,19 +12,24 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.context.WebApplicationContext;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.startsWith;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -44,6 +49,9 @@ class OfficialErrorCodeFlowTest {
     private WebApplicationContext context;
     @Autowired
     private JdbcTemplate jdbc;
+    // 조회가 불린 때를 지켜보려고 - 평소에는 실제 동작 그대로
+    @MockitoSpyBean
+    private OfficialErrorCodeLookup lookup;
 
     private MockMvc mockMvc;
     private TestAccounts accounts;
@@ -133,25 +141,34 @@ class OfficialErrorCodeFlowTest {
     @DisplayName("셋 다 맞으면 매뉴얼의 오류 이름·설명·출처·쪽 - 띄어쓰기·대소문자·제품 이름 꼴·숫자만 쓴 코드도 같게 봄")
     void matched() throws Exception {
         Session session = startInquiry();
-        ownerSets(session, field("manufacturer", "귀뚜라미"), field("model", "l20 22hfn"), field("error_code", "297"));
+        ownerSets(session, field("manufacturer", "귀뚜라미"), field("model", "l20 22hfn"), field("error_code", "396"));
 
         getAs(ownerToken, session.ownerPath())
                 .andExpect(status().isOk())
                 .andExpect(jsonPath(OFFICIAL + ".status").value("MATCHED"))
                 .andExpect(jsonPath(OFFICIAL + ".reason").value(nullValue()))
-                .andExpect(jsonPath(OFFICIAL + ".errorCode").value("E297"))
+                .andExpect(jsonPath(OFFICIAL + ".errorCode").value("E396"))
                 .andExpect(jsonPath(OFFICIAL + ".modelName").value("L20-22HFN"))
-                .andExpect(jsonPath(OFFICIAL + ".title").value("가스누설이상"))
-                .andExpect(jsonPath(OFFICIAL + ".description").value(startsWith("보일러 내부에서 가스가 누설되고")))
+                .andExpect(jsonPath(OFFICIAL + ".title").value("과열센서 이상"))
+                .andExpect(jsonPath(OFFICIAL + ".description").value(startsWith("과열 안전장치가 작동되어")))
                 .andExpect(jsonPath(OFFICIAL + ".manual.productName").value("거꾸로 ECO 콘덴싱 L20 가스보일러"))
                 .andExpect(jsonPath(OFFICIAL + ".manual.documentName").value("사용·설치 설명서(품질보증서 재중)"))
                 .andExpect(jsonPath(OFFICIAL + ".manual.documentVersion").value("S 260911"))
-                .andExpect(jsonPath(OFFICIAL + ".manual.page").value(27))
+                .andExpect(jsonPath(OFFICIAL + ".manual.page").value(28))
                 .andExpect(jsonPath(OFFICIAL + ".manual.sourceUrl").value("https://krb.co.kr/download"))
                 .andExpect(jsonPath(OFFICIAL + ".manual.fileUrl").value(containsString("file_srl=27788")))
                 .andExpect(jsonPath(OFFICIAL + ".manual.checkedOn").value("2026-11-16"))
                 // 항목 값은 사실 칸에 그대로 - 공식 설명이 값을 바꾸지 않음
-                .andExpect(jsonPath("$.result.fields[3].value").value("297"));
+                .andExpect(jsonPath("$.result.fields[3].value").value("396"));
+
+        // 설명과 조치(가스밸브 잠금·환기)가 한 문장인 코드 - 조치를 옮기지 않으려고 설명은 null, 이름·출처는 보여 줌
+        ownerSets(session, field("error_code", "297"));
+        getAs(ownerToken, session.ownerPath())
+                .andExpect(jsonPath(OFFICIAL + ".status").value("MATCHED"))
+                .andExpect(jsonPath(OFFICIAL + ".errorCode").value("E297"))
+                .andExpect(jsonPath(OFFICIAL + ".title").value("가스누설이상"))
+                .andExpect(jsonPath(OFFICIAL + ".description").value(nullValue()))
+                .andExpect(jsonPath(OFFICIAL + ".manual.page").value(27));
 
         ownerSets(session, field("model", "귀뚜라미 트윈알파 에코 E11 가스보일러"), field("error_code", "e-001"));
         getAs(ownerToken, session.ownerPath())
@@ -170,6 +187,33 @@ class OfficialErrorCodeFlowTest {
                 .andExpect(jsonPath(OFFICIAL + ".title").value("배관누수에러"))
                 .andExpect(jsonPath(OFFICIAL + ".description").value(nullValue()))
                 .andExpect(jsonPath(OFFICIAL + ".manual.page").value(25));
+    }
+
+    @Test
+    @DisplayName("공식 설명 조회는 문의 트랜잭션이 끝난 뒤에 - 상세·수정 모두 (한 요청이 DB 연결을 둘 쥐지 않음)")
+    void lookupRunsOutsideInquiryTransaction() throws Exception {
+        List<Boolean> insideTransaction = new CopyOnWriteArrayList<>();
+        doAnswer(invocation -> {
+            insideTransaction.add(TransactionSynchronizationManager.isActualTransactionActive());
+            return invocation.callRealMethod();
+        }).when(lookup).find(any(), any(), any());
+        Session session = startInquiry();
+
+        // 수정(PATCH) 한 번, 상세(GET) 한 번
+        ownerSets(session, field("manufacturer", "귀뚜라미"), field("model", "L20-22HFN"), field("error_code", "E396"));
+        getAs(ownerToken, session.ownerPath())
+                .andExpect(jsonPath(OFFICIAL + ".status").value("MATCHED"));
+
+        assertThat(insideTransaction).containsExactly(false, false);
+    }
+
+    @Test
+    @DisplayName("설명서 자료의 설명에는 조치 안내(잠그기·환기·점검 요청 등)가 없음")
+    void descriptionsHaveNoActionSteps() {
+        assertThat(jdbc.queryForList("SELECT description FROM official_manual_error_code "
+                + "WHERE description IS NOT NULL", String.class))
+                .isNotEmpty()
+                .noneMatch(text -> text.matches(".*(잠그|잠근|환기|하십시오|하세요|주십시오|주세요|해야 합니다|시켜야).*"));
     }
 
     @Test
