@@ -102,6 +102,12 @@ public class VerificationService {
         // 같은 번호로 동시에 들어온 요청이 둘 다 제한 검사를 통과하지 않게 번호 단위로 줄 세움
         jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", (RowCallbackHandler) rs -> {
         }, "phone_verification:" + phone);
+        // 같은 IP에서 번호만 바꿔 동시에 보낸 요청이 IP 한도를 함께 통과하지 않게 IP 단위로도 줄 세움
+        // 모든 요청이 번호 → IP 순서로 잠그므로 서로 물고 기다리지 않음 (IP를 모르면 한도 검사처럼 건너뜀)
+        if (requestIp != null) {
+            jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", (RowCallbackHandler) rs -> {
+            }, "phone_verification_ip:" + requestIp);
+        }
         Instant now = clock.instant();
         checkSendLimits(purpose, phone, requestIp, now);
 
