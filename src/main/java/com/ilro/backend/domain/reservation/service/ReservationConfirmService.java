@@ -45,6 +45,7 @@ import java.util.function.Supplier;
 // 순서 (명세 1.6·1.7·5.2)
 //   1) 같은 Idempotency-Key로 이미 저장한 예약이 있으면 지문이 같을 때 처음 결과를 200, 다르면 409 IDEMPOTENCY_KEY_REUSED
 //   2) 잠그기 전 검사 - 업체·문의(1·2번)·시간(3번)·번호 인증(4번). 지도는 여기서만 부름
+//      시각은 후보 조회와 같은 간격(SlotGrid) 위에 있어야 함 - 아니면 400, 1년 넘게 떨어진 날짜도 400
 //      검사가 막히면 같은 키를 한 번 더 확인 - 1)과 이 검사 사이에 같은 요청이 먼저 저장을 끝냈으면 그 결과를 200
 //   3) 업체 행을 잠근 뒤(3초 넘으면 503) 같은 검사를 DB만으로 다시 - 지도 답은 2)에서 받은 것을 다시 씀
 //      잠그기 전과 앞뒤 방문지가 달라져 처음 보는 이동 구간이 생기면 409 SLOT_UNAVAILABLE(TRAVEL_CONFLICT) - 다른 시간 고르기
@@ -66,6 +67,7 @@ public class ReservationConfirmService {
     private final VisitScheduleService visitSchedule;
     private final MapLookup mapLookup;
     private final ReservationNotifier notifier;
+    private final SlotGrid slotGrid;
     private final TransactionTemplate readTx;
     private final TransactionTemplate writeTx;
 
@@ -73,7 +75,8 @@ public class ReservationConfirmService {
                                      OwnerRepository ownerRepository, NotificationRepository notificationRepository,
                                      BookingEligibility eligibility, BookingEscalation escalation,
                                      VisitScheduleService visitSchedule, MapLookup mapLookup,
-                                     ReservationNotifier notifier, PlatformTransactionManager transactionManager) {
+                                     ReservationNotifier notifier, SlotGrid slotGrid,
+                                     PlatformTransactionManager transactionManager) {
         this.inquiryAccess = inquiryAccess;
         this.reservationRepository = reservationRepository;
         this.ownerRepository = ownerRepository;
@@ -83,6 +86,7 @@ public class ReservationConfirmService {
         this.visitSchedule = visitSchedule;
         this.mapLookup = mapLookup;
         this.notifier = notifier;
+        this.slotGrid = slotGrid;
         this.readTx = new TransactionTemplate(transactionManager);
         this.readTx.setReadOnly(true);
         this.writeTx = new TransactionTemplate(transactionManager);
@@ -96,6 +100,8 @@ public class ReservationConfirmService {
                            ReservationConfirmRequest request) {
         String key = RequestFingerprint.idempotencyKey(idempotencyKey);
         Instant startAt = startAtOf(request);
+        // 터무니없이 먼 날짜는 일정을 읽기 전에 400 (날짜 계산이 넘쳐 500이 나지 않게)
+        slotGrid.requireReasonable(startAt);
         String hash = RequestFingerprint.of(PATH.formatted(inquiryId), "INQUIRY:" + inquiryId,
                 "{\"startAt\":\"" + startAt + "\"}");
 
@@ -139,6 +145,12 @@ public class ReservationConfirmService {
         AskedAreas areas = new AskedAreas(mapLookup::serviceArea);
         TravelTimes travel = visitSchedule.newTravelRequest();
         SlotCheck check = check(inquiry, startAt, areas, travel);
+        // 후보 조회가 내놓지 않는 시각(30분 간격인데 10:07 같은)은 다른 검사를 통과해도 받지 않음
+        // 사장님 확인으로 넘기기(422) 전에 봄 - 잘못 보낸 시각 때문에 문의가 넘어가지 않게
+        if (!slotGrid.offers(inquiry.getOwner(), startAt)) {
+            throw new BusinessException(CommonErrorCode.INVALID_INPUT,
+                    List.of(new FieldErrorResponse("startAt", "고를 수 있는 시각이 아닙니다")));
+        }
         if (check.travelUnknown()) {
             throw new AskOwner(ReservationErrorCode.TRAVEL_TIME_UNAVAILABLE, null);
         }
