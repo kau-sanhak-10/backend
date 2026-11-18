@@ -46,10 +46,11 @@ public class InquiryRecoveryService {
     }
 
     // 다른 번호·다른 업체·삭제된 문의는 있다는 사실도 숨기고 404, 종료된 상담은 409
+    // 문의 행을 잠근 뒤 번호를 확인 - 확인과 토큰 발급 사이에 방문정보 번호가 바뀌어도 옛 번호로 토큰이 나가지 않음
     @Transactional
     public InquiryAccessTokenResponse issueAccessToken(AuthPrincipal principal, Long inquiryId) {
         checkRecoveryScope(principal);
-        Inquiry inquiry = inquiryRepository.findById(inquiryId)
+        Inquiry inquiry = inquiryRepository.findByIdForUpdate(inquiryId)
                 .filter(found -> !found.isDeleted() && found.getOwner().getId().equals(principal.ownerId())
                         && found.getCustomer() != null
                         && found.getCustomer().getPhone().equals(principal.customerPhone()))
