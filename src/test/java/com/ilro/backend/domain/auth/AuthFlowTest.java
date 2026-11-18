@@ -29,6 +29,13 @@ import org.springframework.web.context.WebApplicationContext;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.allOf;
@@ -314,6 +321,48 @@ class AuthFlowTest {
                 .andExpect(status().isTooManyRequests())
                 .andExpect(jsonPath("$.code").value("VERIFICATION_SEND_LIMITED"));
         assertThat(smsSender.hasSentTo(phone)).isFalse();
+    }
+
+    @Test
+    @DisplayName("IP 한도 경계 - 같은 IP에서 번호만 바꿔 동시에 보내도 한도(30)까지만 문자가 나간다")
+    void ipHourlyLimitUnderConcurrency() throws Exception {
+        for (int i = 0; i < 29; i++) {
+            seedSend(accounts.newPhone(), ip, Duration.ofMinutes(55 - i), false);
+        }
+        List<String> phones = new ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            String phone = accounts.newPhone();
+            accounts.approvedOwner(phone);
+            phones.add(phone);
+        }
+
+        ExecutorService pool = Executors.newFixedThreadPool(phones.size());
+        List<Integer> statuses = new ArrayList<>();
+        try {
+            CountDownLatch ready = new CountDownLatch(phones.size());
+            CountDownLatch go = new CountDownLatch(1);
+            List<Future<Integer>> futures = new ArrayList<>();
+            for (String phone : phones) {
+                futures.add(pool.submit(() -> {
+                    ready.countDown();
+                    go.await();
+                    return sendCode("OWNER_LOGIN", phone).andReturn().getResponse().getStatus();
+                }));
+            }
+            ready.await();
+            go.countDown();
+            for (Future<Integer> future : futures) {
+                statuses.add(future.get(30, TimeUnit.SECONDS));
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        // 남은 한 자리만 통과 - 나머지는 앞 요청이 끝난 뒤 다시 세어 429
+        assertThat(statuses).containsExactlyInAnyOrder(201, 429, 429, 429);
+        assertThat(phones.stream().filter(smsSender::hasSentTo).count()).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM phone_verification WHERE request_ip = ? "
+                + "AND created_at > CURRENT_TIMESTAMP - interval '1 hour'", Integer.class, ip)).isEqualTo(30);
     }
 
     @Test

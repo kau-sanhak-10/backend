@@ -16,6 +16,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
@@ -39,24 +41,31 @@ public class CustomerReservationService {
     private final ReservationRepository reservationRepository;
     private final ReservationChangeRepository changeRepository;
     private final CustomerReservationAccess access;
+    private final Clock clock;
 
     @Transactional(readOnly = true)
     public CustomerReservationsResponse list(AuthPrincipal principal) {
         CustomerReservationAccess.requireLookupToken(principal);
         List<Reservation> reservations = reservationRepository.findByCustomerPhone(principal.ownerId(),
                 principal.customerPhone(), PageRequest.of(0, MAX_RESERVATIONS));
+        CustomerReservationsResponse response = CustomerReservationsResponse.from(reservations);
         reservations.forEach(reservation -> AccessLog.record(principal, "VIEW", "reservation", reservation.getId()));
-        return CustomerReservationsResponse.from(reservations);
+        return response;
     }
 
     @Transactional(readOnly = true)
     public CustomerReservationDetailResponse detail(AuthPrincipal principal, Long reservationId) {
         Reservation reservation = access.find(principal, reservationId);
+        // 기한이 지난 제안은 상태가 아직 PROPOSED여도 진행 중 변경으로 보여 주지 않음
+        Instant now = clock.instant();
         ReservationChange activeChange = changeRepository
                 .findFirstByReservationIdAndStatusIn(reservationId, ACTIVE_CHANGE)
+                .filter(change -> !change.isExpiredProposal(now))
                 .orElse(null);
+        // 응답을 다 만든 뒤에 조회 기록 - 만들다 실패한 요청이 성공으로 남지 않게
+        CustomerReservationDetailResponse response = CustomerReservationDetailResponse.of(reservation, activeChange);
         AccessLog.record(principal, "VIEW", "reservation", reservationId);
-        return CustomerReservationDetailResponse.of(reservation, activeChange);
+        return response;
     }
 
     // 변경 요청·제안 이력 (C-17) - 상세와 같은 권한 (남의 예약은 404)

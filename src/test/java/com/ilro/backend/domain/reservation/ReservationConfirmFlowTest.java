@@ -1,5 +1,6 @@
 package com.ilro.backend.domain.reservation;
 
+import com.ilro.backend.domain.inquiry.service.IntakeTerms;
 import com.ilro.backend.domain.reservation.service.MapLookup;
 import com.ilro.backend.support.TestAccounts;
 import com.jayway.jsonpath.JsonPath;
@@ -55,9 +56,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 class ReservationConfirmFlowTest {
 
-    private static final String ALL_CONSENTS = """
-            {"consents":[{"type":"PRIVACY_REQUIRED","termsVersion":"2026-10-v1"},
-                         {"type":"PHOTO","termsVersion":"2026-10-v1"}]}""";
     private static final ZoneId KST = ZoneId.of("Asia/Seoul");
     private static final String ADDRESS = "경기 고양시 덕양구 화정로 1";
 
@@ -66,6 +64,10 @@ class ReservationConfirmFlowTest {
 
     @Autowired
     private JdbcTemplate jdbc;
+
+    // 동의 약관 버전은 설정값(INTAKE_TERMS_VERSION)을 그대로 씀 - 개발자 .env에서 버전을 바꿔도 접수가 막히지 않게
+    @Autowired
+    private IntakeTerms intakeTerms;
 
     // 잠그기 전 검사 도중에 다른 요청을 끼워 넣을 때만 씀 - 평소에는 실제 동작 그대로
     @MockitoSpyBean
@@ -210,6 +212,55 @@ class ReservationConfirmFlowTest {
                 .andExpect(jsonPath("$.result[0].field").value("startAt"));
         assertThat(reservations()).isZero();
         assertThat(inquiryStatus(session)).isEqualTo("SCHEDULING");
+    }
+
+    @Test
+    @DisplayName("고를 수 없는 시각 - 후보 간격(30분)에 없는 시각·1년 넘게 떨어진 날짜는 400, 저장·사장님 확인 없음")
+    void notOfferedStart() throws Exception {
+        Session session = verifiedInquiry();
+        // 09:00부터 30분 간격 - 겹치는 예약이 없어도 그 사이 시각은 받지 않음
+        for (String startAt : List.of(time(monday, "10:07"), time(monday, "10:15"), time(monday.plusYears(2), "10:00"))) {
+            confirm(session, UUID.randomUUID().toString(), startAt)
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_INPUT"))
+                    .andExpect(jsonPath("$.result[0].field").value("startAt"));
+        }
+        // 달력 끝의 날짜 - 날짜 계산이 넘쳐 500이 나지 않음
+        confirm(session, UUID.randomUUID().toString(), "+999999999-12-31T01:00:00Z")
+                .andExpect(status().isBadRequest());
+        assertThat(reservations()).isZero();
+        assertThat(inquiryStatus(session)).isEqualTo("SCHEDULING");
+        assertThat(needsCheck(session)).isZero();
+
+        // 간격 위의 시각은 그대로 확정
+        confirm(session, UUID.randomUUID().toString(), time(monday, "10:30"))
+                .andExpect(status().isCreated());
+    }
+
+    @Test
+    @DisplayName("예약 상세 - 답할 기한이 지난 제안은 상태가 PROPOSED로 남아 있어도 진행 중 변경으로 보여 주지 않음")
+    void expiredProposalHidden() throws Exception {
+        Session session = verifiedInquiry();
+        long reservationId = reservationId(confirm(session, UUID.randomUUID().toString(), time(monday, "10:00"))
+                .andExpect(status().isCreated()));
+        long changeId = jdbc.queryForObject("INSERT INTO reservation_change (reservation_id, change_type, "
+                + "requested_by, prev_start_at, prev_end_at, proposed_start_at, proposed_end_at, expires_at, status, "
+                + "base_version) VALUES (?, 'CHANGE', 'OWNER', ?, ?, ?, ?, CURRENT_TIMESTAMP + interval '1 hour', "
+                + "'PROPOSED', 0) RETURNING id", Long.class, reservationId, at(monday, 10, 0), at(monday, 11, 0),
+                at(monday, 14, 0), at(monday, 15, 0));
+
+        getAs(session.token(), "/api/v1/customer/reservations/" + reservationId)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.activeChange.status").value("PROPOSED"));
+
+        jdbc.update("UPDATE reservation_change SET expires_at = CURRENT_TIMESTAMP - interval '1 second' WHERE id = ?",
+                changeId);
+        getAs(session.token(), "/api/v1/customer/reservations/" + reservationId)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.activeChange").doesNotExist());
+        // 조회는 저장된 상태를 바꾸지 않음
+        assertThat(jdbc.queryForObject("SELECT status FROM reservation_change WHERE id = ?", String.class, changeId))
+                .isEqualTo("PROPOSED");
     }
 
     @Test
@@ -465,7 +516,10 @@ class ReservationConfirmFlowTest {
     // 예약 준비가 끝난 상담 - 시간 선택 단계, 주소·좌표, 수리 작업, 증상 확인됨 (방문정보 번호는 아직 없음)
     private Session readyInquiry() throws Exception {
         String body = mockMvc.perform(post("/api/v1/public/intake/" + accounts.linkToken(ownerId) + "/inquiries")
-                        .contentType(MediaType.APPLICATION_JSON).content(ALL_CONSENTS))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"consents\":[{\"type\":\"PRIVACY_REQUIRED\",\"termsVersion\":\""
+                                + intakeTerms.version() + "\"},{\"type\":\"PHOTO\",\"termsVersion\":\""
+                                + intakeTerms.version() + "\"}]}"))
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
         Session session = new Session(((Number) JsonPath.read(body, "$.result.inquiryId")).longValue(),
