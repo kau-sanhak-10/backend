@@ -1,5 +1,6 @@
 package com.ilro.backend.domain.reservation;
 
+import com.ilro.backend.domain.reservation.service.MapLookup;
 import com.ilro.backend.support.TestAccounts;
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.AfterEach;
@@ -12,6 +13,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
@@ -34,11 +36,15 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongConsumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.hasSize;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -60,6 +66,10 @@ class ReservationConfirmFlowTest {
 
     @Autowired
     private JdbcTemplate jdbc;
+
+    // 잠그기 전 검사 도중에 다른 요청을 끼워 넣을 때만 씀 - 평소에는 실제 동작 그대로
+    @MockitoSpyBean
+    private MapLookup mapLookup;
 
     private MockMvc mockMvc;
     private TestAccounts accounts;
@@ -323,6 +333,39 @@ class ReservationConfirmFlowTest {
         }
         assertThat(ids.get(0)).isEqualTo(ids.get(1));
         assertThat(reservations()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("같은 키 경합 - 처음 확인과 잠그기 전 검사 사이에 같은 요청이 먼저 저장을 끝내도 409가 아니라 같은 예약을 200")
+    void sameKeySavedDuringPrecheck() throws Exception {
+        Session session = verifiedInquiry();
+        String key = UUID.randomUUID().toString();
+        // 뒤 요청이 잠그기 전 검사(서비스 지역 확인)를 하는 도중에, 같은 키의 앞 요청이 다른 스레드에서 끝까지 저장
+        AtomicBoolean interrupted = new AtomicBoolean();
+        AtomicReference<MockHttpServletResponse> first = new AtomicReference<>();
+        doAnswer(invocation -> {
+            if (interrupted.compareAndSet(false, true)) {
+                ExecutorService other = Executors.newSingleThreadExecutor();
+                try {
+                    first.set(other.submit(() -> confirm(session, key, time(monday, "10:00")).andReturn()
+                            .getResponse()).get(30, TimeUnit.SECONDS));
+                } finally {
+                    other.shutdownNow();
+                }
+            }
+            return invocation.callRealMethod();
+        }).when(mapLookup).serviceArea(any(), any());
+
+        MockHttpServletResponse second = confirm(session, key, time(monday, "10:00")).andReturn().getResponse();
+
+        assertThat(first.get().getStatus()).isEqualTo(201);
+        assertThat(second.getStatus()).as(second.getContentAsString()).isEqualTo(200);
+        assertThat(((Number) JsonPath.read(second.getContentAsString(), "$.result.reservationId")).longValue())
+                .isEqualTo(((Number) JsonPath.read(first.get().getContentAsString(), "$.result.reservationId"))
+                        .longValue());
+        assertThat(reservations()).isEqualTo(1);
+        assertThat(needsCheck(session)).isZero();
+        assertThat(inquiryStatus(session)).isEqualTo("BOOKED");
     }
 
     @Test

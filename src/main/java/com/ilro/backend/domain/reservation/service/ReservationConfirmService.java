@@ -43,6 +43,7 @@ import java.util.function.Supplier;
 // 순서 (명세 1.6·1.7·5.2)
 //   1) 같은 Idempotency-Key로 이미 저장한 예약이 있으면 지문이 같을 때 처음 결과를 200, 다르면 409 IDEMPOTENCY_KEY_REUSED
 //   2) 잠그기 전 검사 - 업체·문의(1·2번)·시간(3번)·번호 인증(4번). 지도는 여기서만 부름
+//      검사가 막히면 같은 키를 한 번 더 확인 - 1)과 이 검사 사이에 같은 요청이 먼저 저장을 끝냈으면 그 결과를 200
 //   3) 업체 행을 잠근 뒤(3초 넘으면 503) 같은 검사를 DB만으로 다시 - 지도 답은 2)에서 받은 것을 다시 씀
 //      잠그기 전과 앞뒤 방문지가 달라져 처음 보는 이동 구간이 생기면 409 SLOT_UNAVAILABLE(TRAVEL_CONFLICT) - 다른 시간 고르기
 //   4) CONFIRMED 예약 저장 + 알림 PENDING 행(고객 문자·사장님 푸시) + 문의 BOOKED, 201
@@ -103,7 +104,18 @@ public class ReservationConfirmService {
         if (replayed.isPresent()) {
             return replayed.get();
         }
-        Precheck precheck = escalating(inquiryId, () -> readTx.execute(status -> precheck(principal, inquiryId, startAt)));
+        Precheck precheck;
+        try {
+            precheck = readTx.execute(status -> precheck(principal, inquiryId, startAt));
+        } catch (BusinessException | AskOwner e) {
+            // 위의 확인과 이 검사 사이에 같은 키의 요청이 먼저 저장을 끝냈으면 '이미 예약 있음'·'그 시간 참'으로
+            // 보이므로, 막힌 이유로 답하거나 사장님 확인으로 넘기기 전에 같은 키를 다시 확인해 그 결과로 답함
+            Optional<Outcome> saved = readTx.execute(status -> replay(key, hash));
+            if (saved.isPresent()) {
+                return saved.get();
+            }
+            throw e instanceof AskOwner ask ? escalated(inquiryId, ask) : e;
+        }
         try {
             return escalating(inquiryId, () -> writeTx.execute(
                     status -> confirmLocked(principal, inquiryId, startAt, key, hash, precheck)));
@@ -251,9 +263,13 @@ public class ReservationConfirmService {
         try {
             return work.get();
         } catch (AskOwner e) {
-            escalation.askOwner(inquiryId, e.code);
-            throw e.result == null ? new BusinessException(e.code) : new BusinessException(e.code, e.result);
+            throw escalated(inquiryId, e);
         }
+    }
+
+    private BusinessException escalated(Long inquiryId, AskOwner e) {
+        escalation.askOwner(inquiryId, e.code);
+        return e.result == null ? new BusinessException(e.code) : new BusinessException(e.code, e.result);
     }
 
     private static final class AskOwner extends RuntimeException {
