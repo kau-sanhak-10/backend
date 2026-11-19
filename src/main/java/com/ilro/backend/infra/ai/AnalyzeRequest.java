@@ -13,7 +13,7 @@ import java.util.Map;
 
 // 문의 분석 요청 (명세 6.2) - AI 서버는 모르는 칸이 오면 거절하므로 계약에 있는 칸만
 // 이름·전화번호·주소는 보내지 않음. 문의의 현재값 기준은 백엔드 DB이고 AI 서버는 상태를 들고 있지 않음
-// inputVersion: 요청 시점의 inquiry.ai_input_seq / askCounts: 항목별로 이미 보낸 보완 질문 수
+// inputVersion: 요청 시점의 inquiry.ai_input_seq / askCounts: 항목별 보완 질문 수 (최초 질문 제외 - 1번 물었으면 0)
 public record AnalyzeRequest(String requestId, Long inquiryId, Long ownerId, long inputVersion,
                              HandlerMode handlerMode, Business business, List<Field> fields,
                              Map<String, Integer> askCounts, List<MessageItem> messages, List<PhotoItem> photos,

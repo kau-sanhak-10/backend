@@ -37,7 +37,7 @@ public interface AiDecisionRepository extends JpaRepository<AiDecision, Long> {
     List<AiDecision> findByInquiryIdAndInputVersionAndStatusInOrderByIdAsc(Long inquiryId, Long inputVersion,
                                                                           Collection<AiDecisionStatus> statuses);
 
-    // 항목별 보완 질문 수 세기 (명세 6.2 askCounts)
+    // 항목별 보완 질문 수 세기 (명세 6.2 askCounts) - 적용된 질문 판단만, 최초 질문은 AiAnalysisStore에서 뺌
     List<AiDecision> findByInquiryIdAndStageAndStatusAndActionIn(Long inquiryId, AiStage stage,
                                                                 AiDecisionStatus status,
                                                                 Collection<AiAction> actions);

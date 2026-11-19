@@ -423,7 +423,9 @@ public class AiAnalysisStore {
                 .toList();
     }
 
-    // 적용된 판단의 보완 질문 대상(nextAction.targetFieldKeys)을 항목별로 셈
+    // 항목별 보완 질문 수 (명세 6.2) - 그 항목의 최초 질문은 빼고 셈: 질문 1번 → 0, 2번 → 1, 한 번도 안 물었으면 키 없음
+    // 적용된(SUCCESS) 판단의 질문 대상(nextAction.targetFieldKeys)만 - 문자 질문·사진 요청·재촬영 요청을 합침
+    // 실패·STALE 기록은 세지 않고, 같은 요청의 결과는 한 번만 SUCCESS로 남아 다시 적용해도 늘지 않음
     private Map<String, Integer> askCounts(Long inquiryId) {
         Map<String, Integer> counts = new HashMap<>();
         for (AiDecision decision : decisionRepository.findByInquiryIdAndStageAndStatusAndActionIn(inquiryId,
@@ -442,6 +444,8 @@ public class AiAnalysisStore {
                 // 읽지 못한 기록은 세지 않음
             }
         }
+        // 여기까지는 항목별 질문 총 발송 수 - 최초 질문 하나를 뺌
+        counts.replaceAll((fieldKey, sent) -> sent - 1);
         return counts;
     }
 
