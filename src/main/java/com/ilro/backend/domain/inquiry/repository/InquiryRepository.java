@@ -62,6 +62,12 @@ public interface InquiryRepository extends JpaRepository<Inquiry, Long> {
     Page<Inquiry> findOwnerInquiries(@Param("ownerId") Long ownerId, @Param("status") InquiryStatus status,
                                      @Param("handlerMode") HandlerMode handlerMode, Pageable pageable);
 
+    // 상담 복구 (C-03, BE-18) - 그 업체에서 방문정보 번호가 이 번호인 문의, 삭제된 문의 빼고 최근 것부터
+    @Query("select i from Inquiry i join i.customer c where i.owner.id = :ownerId and c.phone = :phone "
+            + "and i.deletedAt is null order by i.id desc")
+    List<Inquiry> findByCustomerPhone(@Param("ownerId") Long ownerId, @Param("phone") String phone,
+                                      Pageable pageable);
+
     // 사장님 홈 확인 필요 건수 (B-10)
     long countByOwnerIdAndStatusAndDeletedAtIsNull(Long ownerId, InquiryStatus status);
 }

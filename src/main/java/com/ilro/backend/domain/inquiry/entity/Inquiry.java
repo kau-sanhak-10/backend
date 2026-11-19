@@ -196,6 +196,11 @@ public class Inquiry extends BaseTimeEntity {
         this.visitInfoSource = source;
     }
 
+    // 예약 전 번호 확인 성공 (BE-18) - 방문정보 번호를 바꾸면 updateVisitInfo가 지움
+    public void markPhoneVerified(Instant verifiedAt) {
+        this.phoneVerifiedAt = verifiedAt;
+    }
+
     public void changeWorkType(OwnerWorkType workType) {
         this.workType = workType;
     }
