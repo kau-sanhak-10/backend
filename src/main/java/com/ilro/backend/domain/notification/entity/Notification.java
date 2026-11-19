@@ -88,4 +88,30 @@ public class Notification extends BaseCreatedEntity {
             readAt = now;
         }
     }
+
+    // 재시도 한도 (명세 5.10) - 이만큼 실패하면 FAILED로 남고 운영 실패 작업(O-07·O-08)에서 확인
+    public static final int MAX_ATTEMPTS = 3;
+
+    // 발송 대상인지 - 보낸 것·건너뛴 것·한도를 넘긴 것은 다시 보내지 않음
+    public boolean isDeliverable() {
+        return (sendStatus == NotificationSendStatus.PENDING || sendStatus == NotificationSendStatus.FAILED)
+                && attemptCount < MAX_ATTEMPTS;
+    }
+
+    // 보냄 - 시도 횟수에 포함
+    public void markSent() {
+        attemptCount++;
+        sendStatus = NotificationSendStatus.SENT;
+    }
+
+    // 못 보냄 - 시도 횟수가 한도 전이면 다음 차례에 다시 (명세 5.10)
+    public void markFailed() {
+        attemptCount++;
+        sendStatus = NotificationSendStatus.FAILED;
+    }
+
+    // 보내기 직전에 보니 보낼 필요가 없어짐 - 취소된 예약의 확정 알림, 끝난 제안, 꺼 둔 유형 등 (시도 아님)
+    public void markSkipped() {
+        sendStatus = NotificationSendStatus.SKIPPED;
+    }
 }

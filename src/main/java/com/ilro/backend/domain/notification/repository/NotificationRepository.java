@@ -12,6 +12,11 @@ import jakarta.persistence.LockModeType;
 import jakarta.persistence.QueryHint;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.QueryHints;
+import com.ilro.backend.domain.notification.entity.NotificationSendStatus;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import java.time.Instant;
+import java.util.Collection;
 
 import java.util.List;
 import java.util.Optional;
@@ -46,4 +51,18 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
     Optional<Notification> findByIdAndOwnerIdAndRecipientAndChannel(Long id, Long ownerId,
                                                                     NotificationRecipient recipient,
                                                                     NotificationChannel channel);
+
+    // 발송 대상 (명세 5.10, BE-14 발송기) - 아직 안 보냈거나 실패하고 한도 전인 것, 오래된 것부터 ID만
+    // 재시도 간격: 처음은 바로, 두 번째는 생성 secondAfter 뒤, 세 번째는 thirdAfter 뒤
+    //   테이블 칸을 늘리지 않고 시도 횟수·생성 시각으로 계산 (3회 이상은 고르지 않음)
+    @Query("select n.id from Notification n where n.channel in :channels and n.sendStatus in :statuses "
+            + "and (n.attemptCount = 0 "
+            + "or (n.attemptCount = 1 and n.createdAt <= :secondAfter) "
+            + "or (n.attemptCount = 2 and n.createdAt <= :thirdAfter)) "
+            + "order by n.id")
+    List<Long> findDeliverableIds(@Param("channels") Collection<NotificationChannel> channels,
+                                  @Param("statuses") Collection<NotificationSendStatus> statuses,
+                                  @Param("secondAfter") Instant secondAfter,
+                                  @Param("thirdAfter") Instant thirdAfter,
+                                  Pageable pageable);
 }
