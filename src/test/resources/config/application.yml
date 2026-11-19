@@ -4,3 +4,6 @@
 app:
   ai:
     enabled: false
+  # 알림 발송기가 테스트 도중 저절로 돌지 않게 - 테스트는 발송기를 직접 부름
+  notification:
+    dispatch-interval: PT1H
