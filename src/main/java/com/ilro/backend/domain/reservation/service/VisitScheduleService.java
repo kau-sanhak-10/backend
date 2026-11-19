@@ -38,12 +38,28 @@ public class VisitScheduleService {
     // 이동시간 묻는 곳을 정해서 검사 - 예약 확정(BE-11)은 잠그기 전 검사에서 물은 구간을 잠근 뒤 다시 씀 (TravelTimes.askedOnly)
     public SlotCheck check(Owner owner, Instant startAt, int workMinutes, GeoPoint destination,
                            Long excludeReservationId, TravelTimes travel) {
+        return check(owner, startAt, workMinutes, destination, excludeReservationId, travel, false);
+    }
+
+    // ignoreBusinessHours: 사장님이 영업시간 밖 경고를 확인한 수동 예약 (BE-12) - 영업시간만 빼고 같은 검사
+    public SlotCheck check(Owner owner, Instant startAt, int workMinutes, GeoPoint destination,
+                           Long excludeReservationId, TravelTimes travel, boolean ignoreBusinessHours) {
         LocalDate date = startAt.atZone(KstTime.ZONE).toLocalDate();
         ScheduleDay day = scheduleReader.read(owner, date, date.plusDays(1)).get(date);
         if (excludeReservationId != null) {
             day = day.withoutVisit(excludeReservationId);
         }
+        if (ignoreBusinessHours) {
+            day = day.withAllDayHours();
+        }
         return SlotChecker.check(day, startAt, workMinutes, destination, clock.instant(), travel);
+    }
+
+    // [startAt, endAt)이 그날 영업시간 안인지 (휴무면 false) - 수동 예약 결과의 영업시간 밖 표시 (BE-12)
+    public boolean withinBusinessHours(Owner owner, Instant startAt, Instant endAt) {
+        LocalDate date = startAt.atZone(KstTime.ZONE).toLocalDate();
+        ScheduleDay day = scheduleReader.read(owner, date, date.plusDays(1)).get(date);
+        return !day.isClosed() && !startAt.isBefore(day.at(day.open())) && !endAt.isAfter(day.at(day.close()));
     }
 
     // 한 요청에서 쓸 이동시간 - 같은 구간은 한 번만 지도에 물음

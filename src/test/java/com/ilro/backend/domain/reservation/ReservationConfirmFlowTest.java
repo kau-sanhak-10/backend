@@ -496,7 +496,8 @@ class ReservationConfirmFlowTest {
                 .andExpect(jsonPath("$.result.contactPhone").value("0311234567"))
                 .andExpect(jsonPath("$.result.activeChange.status").value("REQUESTED"))
                 .andExpect(jsonPath("$.result.activeChange.requestedBy").value("CUSTOMER"))
-                .andExpect(jsonPath("$.result.activeChange.proposedStartAt").doesNotExist());
+                .andExpect(jsonPath("$.result.activeChange.previous.startAt").value(time(monday, "10:00")))
+                .andExpect(jsonPath("$.result.activeChange.proposed.startAt").doesNotExist());
 
         Session other = verifiedInquiry();
         getAs(other.token(), "/api/v1/customer/reservations/" + reservationId)

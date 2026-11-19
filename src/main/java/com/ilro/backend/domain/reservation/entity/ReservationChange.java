@@ -92,6 +92,53 @@ public class ReservationChange extends BaseCreatedEntity {
     @Column(nullable = false)
     private int baseVersion;
 
+    // 진행 중 (예약당 1건, uq_reservation_change_active)
+    public boolean isActive() {
+        return status == ReservationChangeStatus.REQUESTED || status == ReservationChangeStatus.PROPOSED
+                || status == ReservationChangeStatus.ACCEPTED;
+    }
+
+    // 사장님 시간 제안 (명세 5.3 2단계) - 주소를 바꾸지 않으면 요청 주소를 지움
+    public void propose(Instant proposedStartAt, Instant proposedEndAt, String proposedAddress, BigDecimal proposedLat,
+                        BigDecimal proposedLng, Instant expiresAt) {
+        this.status = ReservationChangeStatus.PROPOSED;
+        this.proposedStartAt = proposedStartAt;
+        this.proposedEndAt = proposedEndAt;
+        this.proposedAddress = proposedAddress;
+        this.proposedLat = proposedLat;
+        this.proposedLng = proposedLng;
+        this.expiresAt = expiresAt;
+    }
+
+    // 고객 수락 뒤 최종 검사 결과 - 같은 트랜잭션에서 ACCEPTED를 거쳐 APPLIED 또는 FAILED
+    public void apply(Instant now) {
+        resolve(ReservationChangeStatus.APPLIED, ChangedBy.CUSTOMER, now);
+    }
+
+    public void fail(Instant now) {
+        resolve(ReservationChangeStatus.FAILED, ChangedBy.SYSTEM, now);
+    }
+
+    public void reject(Instant now) {
+        resolve(ReservationChangeStatus.REJECTED, ChangedBy.CUSTOMER, now);
+    }
+
+    public void expire(Instant now) {
+        resolve(ReservationChangeStatus.EXPIRED, ChangedBy.SYSTEM, now);
+    }
+
+    // 예약 취소·사장님 요청 닫기
+    public void close(ReservationChangeCloseReason reason, ChangedBy by, Instant now) {
+        resolve(ReservationChangeStatus.CLOSED, by, now);
+        this.closeReason = reason;
+    }
+
+    private void resolve(ReservationChangeStatus status, ChangedBy by, Instant now) {
+        this.status = status;
+        this.resolvedBy = by;
+        this.resolvedAt = now;
+    }
+
     @Builder
     private ReservationChange(Reservation reservation, ReservationChangeType changeType, RequestedBy requestedBy,
                               String requestNote, Instant prevStartAt, Instant prevEndAt, String prevAddress,

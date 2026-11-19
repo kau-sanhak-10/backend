@@ -5,7 +5,7 @@ import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 
-// 인증·계정 오류 코드 (명세 3.2) - 사장님·운영자 로그인(BE-02)·고객 인증(BE-18)에 쓰는 것, 예약 확정 전 확인·탈퇴는 BE-11·BE-04에서 추가
+// 인증·계정 오류 코드 (명세 3.2) - 사장님·운영자 로그인(BE-02)·고객 인증(BE-18)에 쓰는 것, 예약 확정 전 확인(BE-11)·탈퇴(BE-16)
 @Getter
 @RequiredArgsConstructor
 public enum AuthErrorCode implements ErrorCode {
@@ -30,7 +30,9 @@ public enum AuthErrorCode implements ErrorCode {
     // result: rejectionReason
     OWNER_REJECTED(HttpStatus.FORBIDDEN, "OWNER_REJECTED", "가입 신청이 거절됐어요"),
     OWNER_RESTRICTED(HttpStatus.FORBIDDEN, "OWNER_RESTRICTED", "이용이 제한된 계정이에요. 운영팀에 문의해 주세요"),
-    OWNER_WITHDRAWN(HttpStatus.FORBIDDEN, "OWNER_WITHDRAWN", "탈퇴한 계정이에요");
+    OWNER_WITHDRAWN(HttpStatus.FORBIDDEN, "OWNER_WITHDRAWN", "탈퇴한 계정이에요"),
+    // result: openInquiries, activeReservations - 처리하지 않은 문의(정보 수집·시간 선택·사장님 확인)·확정 예약 수 (BE-16)
+    WITHDRAWAL_BLOCKED(HttpStatus.UNPROCESSABLE_CONTENT, "WITHDRAWAL_BLOCKED", "처리하지 않은 문의나 확정 예약이 남아 있어 탈퇴할 수 없어요");
 
     private final HttpStatus status;
     private final String code;
