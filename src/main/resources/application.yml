@@ -78,3 +78,8 @@ app:
     local-base-url: https://dapi.kakao.com
     # 카카오모빌리티 자동차 길찾기 (이동시간) - 키는 위 REST API 키 그대로
     navi-base-url: https://apis-navi.kakaomobility.com
+
+  push:
+    # Web Push(VAPID) 공개키 - 브라우저가 구독할 때 받음 (B-27, BE-14). 비밀키는 발송(3단계)에서 추가
+    # 서버(dev·prod)는 Parameter Store, 로컬은 .env (비어 있으면 공개키 API가 503)
+    vapid-public-key: ${VAPID_PUBLIC_KEY:}

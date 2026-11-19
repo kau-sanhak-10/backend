@@ -102,6 +102,7 @@ public class TestAccounts {
             jdbc.update("DELETE FROM inquiry WHERE owner_id = ?", ownerId);
             jdbc.update("DELETE FROM customer WHERE owner_id = ?", ownerId);
             jdbc.update("DELETE FROM notification WHERE owner_id = ?", ownerId);
+            jdbc.update("DELETE FROM push_subscription WHERE owner_id = ?", ownerId);
             jdbc.update("DELETE FROM owner_block WHERE owner_id = ?", ownerId);
             jdbc.update("DELETE FROM owner_business_hour WHERE owner_id = ?", ownerId);
             jdbc.update("DELETE FROM owner_service_area WHERE owner_id = ?", ownerId);
