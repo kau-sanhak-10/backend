@@ -8,6 +8,10 @@ import com.ilro.backend.domain.notification.entity.NotificationRefType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import jakarta.persistence.LockModeType;
+import jakarta.persistence.QueryHint;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.QueryHints;
 
 import java.util.List;
 import java.util.Optional;
@@ -36,6 +40,9 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
                                                                           Pageable pageable);
 
     // 읽음 처리 대상 (B-26) - 다른 업체 알림·푸시/문자 행은 없는 것처럼
+    // 행을 잠가 동시에 읽어도 처음 읽은 시각만 남음 (3초 넘게 기다리면 실패)
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "3000"))
     Optional<Notification> findByIdAndOwnerIdAndRecipientAndChannel(Long id, Long ownerId,
                                                                     NotificationRecipient recipient,
                                                                     NotificationChannel channel);
