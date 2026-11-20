@@ -11,10 +11,8 @@ import com.ilro.backend.global.common.util.AccessLog;
 import com.ilro.backend.global.exception.BusinessException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
-import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -36,16 +34,14 @@ public class PrivacyDeletionService {
 
     private final InquiryDataEraser eraser;
     private final AdminAccess adminAccess;
-    private final JdbcTemplate jdbc;
     private final Clock clock;
     // 보관기간(일) - 정해지지 않았으면 null
     private final Integer retentionDays;
 
-    public PrivacyDeletionService(InquiryDataEraser eraser, AdminAccess adminAccess, JdbcTemplate jdbc, Clock clock,
+    public PrivacyDeletionService(InquiryDataEraser eraser, AdminAccess adminAccess, Clock clock,
                                   @Value("${app.privacy.retention-days:}") Integer retentionDays) {
         this.eraser = eraser;
         this.adminAccess = adminAccess;
-        this.jdbc = jdbc;
         this.clock = clock;
         this.retentionDays = retentionDays;
     }
@@ -54,10 +50,14 @@ public class PrivacyDeletionService {
         adminAccess.requireSuper(principal);
         List<Long> inquiryIds = request.inquiryIds().stream().distinct().toList();
         Instant now = clock.instant();
+        // 보관기간 근거일 때만 - 이 시각보다 나중에 바뀐 문의는 아직 보관기간 안
+        Instant retentionCutoff = request.basis() == Basis.RETENTION_EXPIRED && retentionDays != null
+                ? now.minus(Duration.ofDays(retentionDays)) : null;
 
         List<Map<String, Object>> reasons = new ArrayList<>();
         for (Long inquiryId : inquiryIds) {
-            notAllowed(inquiryId, request.basis(), now).ifPresent(reason -> reasons.add(reason(inquiryId, reason)));
+            notAllowed(inquiryId, request.basis(), retentionCutoff)
+                    .ifPresent(reason -> reasons.add(reason(inquiryId, reason)));
         }
         if (!reasons.isEmpty()) {
             AccessLog.record(principal, "DELETE", "privacy_deletion", null, AccessLog.Result.FAILED);
@@ -68,7 +68,8 @@ public class PrivacyDeletionService {
         List<Failed> failed = new ArrayList<>();
         for (Long inquiryId : inquiryIds) {
             try {
-                deleted.add(eraser.erase(inquiryId, now));
+                // 지울 때 문의를 잠그고 다시 확인 - 위 확인 뒤에 상태·예약·보관기간이 달라졌으면 그 문의는 실패 범위로
+                deleted.add(eraser.erase(inquiryId, now, retentionCutoff));
                 AccessLog.record(principal, "DELETE", "inquiry", inquiryId);
             } catch (RuntimeException e) {
                 failed.add(new Failed(inquiryId, failureReason(e)));
@@ -86,23 +87,13 @@ public class PrivacyDeletionService {
     }
 
     // 지울 수 없는 이유 - 없으면 empty
-    private Optional<String> notAllowed(Long inquiryId, Basis basis, Instant now) {
-        Optional<InquiryDataEraser.Blocker> blocker = eraser.blocker(inquiryId);
-        if (blocker.isPresent()) {
-            return blocker.map(Enum::name);
+    private Optional<String> notAllowed(Long inquiryId, Basis basis, Instant retentionCutoff) {
+        Optional<String> blocker = eraser.blocker(inquiryId, retentionCutoff).map(Enum::name);
+        // 보관기간이 정해지지 않았으면 그 근거로는 지우지 않음 (없는 문의·진행 중처럼 다른 이유가 있으면 그 이유를 알림)
+        if (blocker.isEmpty() && basis == Basis.RETENTION_EXPIRED && retentionDays == null) {
+            return Optional.of("RETENTION_PERIOD_UNDEFINED");
         }
-        if (basis == Basis.RETENTION_EXPIRED) {
-            if (retentionDays == null) {
-                return Optional.of("RETENTION_PERIOD_UNDEFINED");
-            }
-            // 마지막으로 바뀐 때부터 보관기간이 지나야 함
-            Timestamp updatedAt = jdbc.queryForObject("SELECT updated_at FROM inquiry WHERE id = ?", Timestamp.class,
-                    inquiryId);
-            if (updatedAt.toInstant().isAfter(now.minus(Duration.ofDays(retentionDays)))) {
-                return Optional.of("RETENTION_NOT_EXPIRED");
-            }
-        }
-        return Optional.empty();
+        return blocker;
     }
 
     private static Map<String, Object> reason(Long inquiryId, String reason) {

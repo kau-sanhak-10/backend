@@ -30,7 +30,7 @@ public class InquiryDataEraser {
 
     // 지울 수 없는 이유 - 잠근 뒤에도 다시 확인
     public enum Blocker {
-        INQUIRY_NOT_FOUND, OPEN_INQUIRY, ACTIVE_RESERVATION
+        INQUIRY_NOT_FOUND, OPEN_INQUIRY, ACTIVE_RESERVATION, RETENTION_NOT_EXPIRED
     }
 
     // 잠근 뒤 확인에서 걸림 - 트랜잭션을 되돌리고 부르는 쪽이 실패 범위로 기록
@@ -60,23 +60,25 @@ public class InquiryDataEraser {
     private final PhotoStorage photoStorage;
 
     // 지금 지울 수 있는지만 봄 (잠그지 않음) - 요청 전체를 실행하기 전에 한 번에 확인하는 데 씀
+    // retentionCutoff: 보관기간이 지났다는 근거일 때만 - 이 시각보다 나중에 바뀐 문의는 아직 보관기간 안 (그 근거가 아니면 null)
     @Transactional(readOnly = true)
-    public Optional<Blocker> blocker(Long inquiryId) {
+    public Optional<Blocker> blocker(Long inquiryId, Instant retentionCutoff) {
         List<Map<String, Object>> rows = jdbc.queryForList(
-                "SELECT status, deleted_at FROM inquiry WHERE id = ?", inquiryId);
-        return rows.isEmpty() ? Optional.of(Blocker.INQUIRY_NOT_FOUND) : blockerOf(inquiryId, rows.getFirst());
+                "SELECT status, deleted_at, updated_at FROM inquiry WHERE id = ?", inquiryId);
+        return rows.isEmpty() ? Optional.of(Blocker.INQUIRY_NOT_FOUND)
+                : blockerOf(inquiryId, rows.getFirst(), retentionCutoff);
     }
 
     @Transactional
-    public Deleted erase(Long inquiryId, Instant now) {
+    public Deleted erase(Long inquiryId, Instant now, Instant retentionCutoff) {
         jdbc.execute("SET LOCAL lock_timeout = '3s'");
         List<Map<String, Object>> rows = jdbc.queryForList(
-                "SELECT status, deleted_at, customer_id FROM inquiry WHERE id = ? FOR UPDATE", inquiryId);
+                "SELECT status, deleted_at, updated_at, customer_id FROM inquiry WHERE id = ? FOR UPDATE", inquiryId);
         if (rows.isEmpty()) {
             throw new BlockedException(Blocker.INQUIRY_NOT_FOUND);
         }
         Map<String, Object> inquiry = rows.getFirst();
-        blockerOf(inquiryId, inquiry).ifPresent(blocker -> {
+        blockerOf(inquiryId, inquiry, retentionCutoff).ifPresent(blocker -> {
             throw new BlockedException(blocker);
         });
 
@@ -113,6 +115,9 @@ public class InquiryDataEraser {
         boolean customerDeleted = false;
         Long customerId = (Long) inquiry.get("customer_id");
         if (customerId != null) {
+            // 고객 행을 잠그고 확인 - 같은 고객의 문의 둘을 동시에 지우면 서로의 (아직 커밋 안 된) 문의가 가리키는 것으로 보여
+            // 둘 다 고객을 남기게 됨. 잠그면 뒤에 온 쪽이 앞쪽이 끝난 뒤에 확인해서 지움
+            jdbc.queryForList("SELECT id FROM customer WHERE id = ? FOR UPDATE", customerId);
             customerDeleted = jdbc.update("DELETE FROM customer c WHERE c.id = ? "
                     + "AND NOT EXISTS (SELECT 1 FROM reservation r WHERE r.customer_id = c.id) "
                     + "AND NOT EXISTS (SELECT 1 FROM inquiry i WHERE i.customer_id = c.id)", customerId) > 0;
@@ -129,7 +134,8 @@ public class InquiryDataEraser {
 
     // 이미 지운 문의는 다시 지워도 됨 (아무것도 남아 있지 않음)
     // 진행 중인 상담(정보 수집·시간 선택·사장님 확인)과 진행 중인 예약(요청·확정)이 있으면 막음
-    private Optional<Blocker> blockerOf(Long inquiryId, Map<String, Object> inquiry) {
+    // erase는 문의 행을 잠근 뒤에 이 확인을 다시 함
+    private Optional<Blocker> blockerOf(Long inquiryId, Map<String, Object> inquiry, Instant retentionCutoff) {
         if (inquiry.get("deleted_at") == null
                 && List.of("COLLECTING", "SCHEDULING", "OWNER_CHECK").contains((String) inquiry.get("status"))) {
             return Optional.of(Blocker.OPEN_INQUIRY);
@@ -137,6 +143,12 @@ public class InquiryDataEraser {
         if (exists("SELECT 1 FROM reservation WHERE inquiry_id = ? AND status IN ('REQUESTED', 'CONFIRMED')",
                 inquiryId)) {
             return Optional.of(Blocker.ACTIVE_RESERVATION);
+        }
+        // 보관기간 근거 - 마지막으로 바뀐 때부터 보관기간이 지나야 함. 잠근 뒤에도 다시 봐서, 확인과 삭제 사이에 바뀐 문의는 지우지 않음
+        // 이미 지운 문의는 지울 때 updated_at이 바뀌었으므로 보지 않음 (같은 요청을 다시 보내도 됨)
+        if (retentionCutoff != null && inquiry.get("deleted_at") == null
+                && ((Timestamp) inquiry.get("updated_at")).toInstant().isAfter(retentionCutoff)) {
+            return Optional.of(Blocker.RETENTION_NOT_EXPIRED);
         }
         return Optional.empty();
     }

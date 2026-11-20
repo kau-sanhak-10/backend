@@ -21,6 +21,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 
 // 고객정보 접근 기록 조회 (O-09, 명세 5.9, BE-19) - SUPER 운영자만
 // 고객정보 조회·수정·삭제 API가 남긴 서버 로그(AccessLog)를 읽어 보여 줌. DB 감사 테이블은 없음
@@ -35,7 +36,8 @@ public class AccessLogQueryService {
     private static final int DEFAULT_PAGE_SIZE = 50;
     private static final int MAX_PAGE_SIZE = 100;
     // 대상 종류 - AccessLog가 쓰는 이름 (inquiry·reservation·owner·owner.home 등), 대소문자 무시
-    private static final String TARGET_TYPE = "[A-Za-z][A-Za-z0-9_.]{0,39}";
+    // (접근 기록을 본 기록은 access_log.{본 대상 종류})
+    private static final String TARGET_TYPE = "[A-Za-z][A-Za-z0-9_.]{0,59}";
 
     private final AccessLogReader reader;
     private final AdminAccess adminAccess;
@@ -92,8 +94,10 @@ public class AccessLogQueryService {
                 .map(AccessLogListResponse.Item::from)
                 .toList();
         int totalPages = (int) Math.ceil(sorted.size() / (double) pageSize);
-        // 접근 기록을 본 것도 기록 - 어느 대상의 기록을 봤는지까지
-        AccessLog.record(principal, "VIEW", "access_log", targetId);
+        // 접근 기록을 본 것도 기록 - 어느 대상의 기록을 봤는지까지 (예: access_log.inquiry:101)
+        // 대상 종류를 빼면 문의 101과 예약 101의 기록을 본 것이 같은 줄이 돼 구분할 수 없음
+        String viewed = targetType == null ? "access_log" : "access_log." + targetType.toLowerCase(Locale.ROOT);
+        AccessLog.record(principal, "VIEW", viewed, targetId);
         return new AccessLogListResponse(content, pageNumber, pageSize, sorted.size(), totalPages,
                 offset + content.size() >= sorted.size(), found.truncated());
     }

@@ -1,6 +1,16 @@
 package com.ilro.backend.domain.admin;
 
+import com.ilro.backend.domain.admin.dto.PrivacyDeletionRequest;
+import com.ilro.backend.domain.admin.dto.PrivacyDeletionRequest.Basis;
+import com.ilro.backend.domain.admin.dto.PrivacyDeletionResponse;
+import com.ilro.backend.domain.admin.dto.PrivacyDeletionResponse.Deleted;
+import com.ilro.backend.domain.admin.service.AdminAccess;
+import com.ilro.backend.domain.admin.service.InquiryDataEraser;
+import com.ilro.backend.domain.admin.service.PrivacyDeletionService;
+import com.ilro.backend.domain.auth.entity.AuthTokenType;
 import com.ilro.backend.domain.inquiry.service.IntakeTerms;
+import com.ilro.backend.global.auth.AuthPrincipal;
+import com.ilro.backend.global.exception.BusinessException;
 import com.ilro.backend.infra.storage.LocalPhotoStorage;
 import com.ilro.backend.support.TestAccounts;
 import com.jayway.jsonpath.JsonPath;
@@ -17,14 +27,27 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.context.WebApplicationContext;
 
+import java.sql.Timestamp;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.endsWith;
 import static org.hamcrest.Matchers.hasItem;
@@ -51,6 +74,14 @@ class AdminPrivacyFlowTest {
     private LocalPhotoStorage storage;
     @Autowired
     private IntakeTerms intakeTerms;
+    @Autowired
+    private InquiryDataEraser eraser;
+    @Autowired
+    private AdminAccess adminAccess;
+    @Autowired
+    private Clock clock;
+    @Autowired
+    private TransactionTemplate transactionTemplate;
 
     private MockMvc mockMvc;
     private TestAccounts accounts;
@@ -292,10 +323,108 @@ class AdminPrivacyFlowTest {
         getAs(superAdmin, ACCESS_LOGS + "?targetType=RESERVATION&targetId=" + id)
                 .andExpect(jsonPath("$.result.content", hasSize(0)));
         // 접근 기록을 본 것도 기록으로 남음 (어느 대상을 봤는지와 함께)
-        getAs(superAdmin, ACCESS_LOGS + "?targetType=access_log&targetId=" + id)
+        // 문의 기록을 본 것 2번, 예약 기록을 본 것 1번 - 같은 번호여도 대상 종류로 구분됨
+        getAs(superAdmin, ACCESS_LOGS + "?targetType=access_log.inquiry&targetId=" + id)
+                .andExpect(jsonPath("$.result.content", hasSize(2)))
                 .andExpect(jsonPath("$.result.content[0].actorType").value("ADMIN"))
                 .andExpect(jsonPath("$.result.content[0].actorId").value(superId))
-                .andExpect(jsonPath("$.result.content[0].action").value("VIEW"));
+                .andExpect(jsonPath("$.result.content[0].action").value("VIEW"))
+                .andExpect(jsonPath("$.result.content[0].targetType").value("ACCESS_LOG.INQUIRY"))
+                .andExpect(jsonPath("$.result.content[0].targetId").value(id));
+        getAs(superAdmin, ACCESS_LOGS + "?targetType=access_log.reservation&targetId=" + id)
+                .andExpect(jsonPath("$.result.content", hasSize(1)));
+    }
+
+    @Test
+    @DisplayName("보관기간 근거 - 기간이 지난 문의만 지우고, 확인 뒤에 바뀐 문의는 잠근 뒤 다시 확인해서 남기며, 지운 문의는 다시 요청해도 됨")
+    void retentionExpired() throws Exception {
+        // 보관기간이 30일로 정해진 경우 (지금 설정에는 없어서 서비스를 직접 만듦)
+        // updated_at은 DB가 바꿀 때마다 지금으로 맞추므로(trigger) 문의를 과거로 옮기는 대신 시계를 미래로 옮김
+        PrivacyDeletionService tenDaysLater = new PrivacyDeletionService(eraser, adminAccess,
+                Clock.offset(clock, Duration.ofDays(10)), 30);
+        PrivacyDeletionService fortyDaysLater = new PrivacyDeletionService(eraser, adminAccess,
+                Clock.offset(clock, Duration.ofDays(40)), 30);
+        AuthPrincipal admin = new AuthPrincipal(null, AuthTokenType.ADMIN, null, superId, null, null, null);
+        Seeded seeded = closedInquiry();
+        long id = seeded.inquiryId();
+        PrivacyDeletionRequest request = new PrivacyDeletionRequest(List.of(id), Basis.RETENTION_EXPIRED, null);
+
+        // 바뀐 지 10일 - 아직 보관기간 안이라 지우지 않음
+        assertThatThrownBy(() -> tenDaysLater.delete(admin, request))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(String.valueOf(e.getResult()))
+                        .isEqualTo("{reasons=[{inquiryId=" + id + ", reason=RETENTION_NOT_EXPIRED}]}"));
+        assertThat(inquiry(id)).containsEntry("deleted", false);
+
+        // 확인을 통과한 뒤 지우기 전에 문의가 바뀜 - 잠근 뒤 다시 확인해서 지우지 않음
+        Instant cutoff = jdbc.queryForObject("SELECT updated_at + interval '1 millisecond' FROM inquiry WHERE id = ?",
+                Timestamp.class, id).toInstant();
+        assertThat(eraser.blocker(id, cutoff)).isEmpty();
+        Thread.sleep(5);
+        jdbc.update("UPDATE inquiry SET access_note = '공동현관 5678' WHERE id = ?", id);
+        assertThatThrownBy(() -> eraser.erase(id, clock.instant(), cutoff))
+                .isInstanceOfSatisfying(InquiryDataEraser.BlockedException.class,
+                        e -> assertThat(e.blocker()).isEqualTo(InquiryDataEraser.Blocker.RETENTION_NOT_EXPIRED));
+        assertThat(inquiry(id)).containsEntry("deleted", false).containsEntry("access_note", "공동현관 5678");
+        assertThat(count("inquiry_field", id)).isEqualTo(2);
+        assertThat(storage.find(seeded.originalKey())).isPresent();
+
+        // 바뀐 지 40일 - 보관기간이 지나서 지움
+        PrivacyDeletionResponse first = fortyDaysLater.delete(admin, request);
+        assertThat(first.failed()).isEmpty();
+        assertThat(first.deleted()).singleElement().satisfies(deleted -> {
+            assertThat(deleted.messages()).isEqualTo(3);
+            assertThat(deleted.customerDeleted()).isTrue();
+        });
+        assertThat(inquiry(id)).containsEntry("deleted", true);
+        // 지우면서 updated_at이 지금이 됐지만(= 보관기간 안처럼 보임) 같은 요청을 다시 보내도 오류가 아님 (지울 것이 없음)
+        PrivacyDeletionResponse again = tenDaysLater.delete(admin, request);
+        assertThat(again.failed()).isEmpty();
+        assertThat(again.deleted()).singleElement().satisfies(deleted -> assertThat(deleted.messages()).isZero());
+        // 아직 보관기간 안인 다른 문의와 섞여도 이유에는 그 문의만
+        Seeded recent = closedInquiry();
+        assertThatThrownBy(() -> tenDaysLater.delete(admin, new PrivacyDeletionRequest(
+                List.of(id, recent.inquiryId()), Basis.RETENTION_EXPIRED, null)))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(String.valueOf(e.getResult()))
+                        .isEqualTo("{reasons=[{inquiryId=" + recent.inquiryId()
+                                + ", reason=RETENTION_NOT_EXPIRED}]}"));
+    }
+
+    @Test
+    @DisplayName("같은 고객의 문의 둘을 동시에 지움 - 뒤에 온 쪽이 앞쪽이 끝난 뒤에 확인해서 고객 이름·번호가 남지 않음")
+    void sharedCustomerErasedConcurrently() throws Exception {
+        Seeded first = closedInquiry();
+        Seeded second = closedInquiry();
+        // 두 문의가 같은 고객을 가리키게
+        jdbc.update("UPDATE inquiry SET customer_id = ? WHERE id = ?", first.customerId(), second.inquiryId());
+        jdbc.update("DELETE FROM customer WHERE id = ?", second.customerId());
+        Instant now = clock.instant();
+
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            // 첫 문의를 지우는 처리가 끝나기(커밋) 전에 두 번째 문의를 지우는 처리가 들어옴
+            Future<Deleted> other = transactionTemplate.execute(tx -> {
+                Deleted deleted = eraser.erase(first.inquiryId(), now, null);
+                // 두 번째 문의가 아직 가리키고 있어서 고객은 남김
+                assertThat(deleted.customerDeleted()).isFalse();
+                Future<Deleted> erasing = executor.submit(() -> eraser.erase(second.inquiryId(), now, null));
+                try {
+                    erasing.get(1, TimeUnit.SECONDS);
+                } catch (TimeoutException waitingForLock) {
+                    // 고객 행 잠금을 기다리는 중 - 첫 처리가 끝나야 진행
+                } catch (InterruptedException | ExecutionException e) {
+                    throw new IllegalStateException(e);
+                }
+                return erasing;
+            });
+
+            assertThat(other.get(10, TimeUnit.SECONDS).customerDeleted()).isTrue();
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM customer WHERE id = ?", Integer.class,
+                    first.customerId())).isZero();
+            assertThat(inquiry(first.inquiryId())).containsEntry("deleted", true);
+            assertThat(inquiry(second.inquiryId())).containsEntry("deleted", true);
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     @Test
