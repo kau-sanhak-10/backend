@@ -13,3 +13,6 @@ logging:
 app:
   intake:
     base-url: ${INTAKE_LINK_BASE_URL}
+  access-log:
+    # 앱 로그가 쌓이는 CloudWatch 로그 그룹 (deploy.sh의 awslogs-group과 같은 이름)
+    log-group: /ilro/dev/app
