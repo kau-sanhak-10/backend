@@ -76,6 +76,12 @@ public class S3PhotoStorage implements PhotoStorage, DisposableBean {
         return new PresignedView(presigned.url().toString(), presigned.expiration());
     }
 
+    // S3는 없는 키를 지워도 성공으로 답함
+    @Override
+    public void delete(String key) {
+        s3.deleteObject(builder -> builder.bucket(bucket).key(key));
+    }
+
     @Override
     public void destroy() {
         presigner.close();

@@ -79,6 +79,16 @@ app:
     # 카카오모빌리티 자동차 길찾기 (이동시간) - 키는 위 REST API 키 그대로
     navi-base-url: https://apis-navi.kakaomobility.com
 
+  access-log:
+    # 고객정보 접근 기록을 읽을 CloudWatch 로그 그룹 (O-09, BE-19) - 서버(dev·prod)만 씀, 프로필 파일에서 정함
+    # 로컬·테스트는 이 서버가 남긴 기록을 메모리에서 읽음
+    log-group: ""
+    region: ap-northeast-2
+  privacy:
+    # 보관기간(일)이 지나서 지우는 삭제 요청(RETENTION_EXPIRED)의 기준 (O-09, BE-19)
+    # 팀이 보관기간을 정하기 전까지 비워 둠 - 비어 있으면 그 근거의 삭제 요청은 실행하지 않고 422
+    retention-days: ${PRIVACY_RETENTION_DAYS:}
+
   push:
     # Web Push(VAPID) 공개키 - 브라우저가 구독할 때 받음 (B-27, BE-14). 비밀키는 발송(3단계)에서 추가
     # 서버(dev·prod)는 Parameter Store, 로컬은 .env (비어 있으면 공개키 API가 503)
