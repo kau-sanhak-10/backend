@@ -15,12 +15,19 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.context.WebApplicationContext;
 
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.endsWith;
@@ -53,6 +60,8 @@ class AdminOwnerFlowTest {
     private JdbcTemplate jdbc;
     @Autowired
     private CapturingSmsSender smsSender;
+    @Autowired
+    private TransactionTemplate transactionTemplate;
 
     private MockMvc mockMvc;
     private TestAccounts accounts;
@@ -406,6 +415,51 @@ class AdminOwnerFlowTest {
                 .andExpect(jsonPath("$.code").value("OWNER_WITHDRAWN"));
         assertThat(owner(ownerId)).containsEntry("status", "WITHDRAWN");
         assertThat(reservationState(reservationId)).isEqualTo("CONFIRMED/김고객");
+    }
+
+    @Test
+    @DisplayName("로그인 번호 변경과 옛 번호 로그인이 겹침 - 로그인은 번호 변경이 끝난 뒤에 처리돼 옛 번호로 토큰이 나가지 않음")
+    void loginDuringPhoneChange() throws Exception {
+        String oldPhone = accounts.newPhone();
+        long ownerId = registered(oldPhone, "덕구보일러");
+        approve(staff, ownerId).andExpect(status().isOk());
+        changeStatus(staff, ownerId, "ACTIVE").andExpect(status().isOk());
+        // 옛 번호로 로그인 인증번호까지 받아 둠
+        String sent = send(null, "OWNER_LOGIN", oldPhone)
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        long loginVerificationId = ((Number) JsonPath.read(sent, "$.result.verificationId")).longValue();
+        String code = smsSender.lastCode(oldPhone);
+        String newPhone = accounts.newPhone();
+        long verificationId = verifiedSignup(newPhone);
+
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            // 번호 변경이 아직 끝나지 않은(커밋 전) 사이에 옛 번호의 로그인 확인이 들어옴
+            Future<MvcResult> login = transactionTemplate.execute(tx -> {
+                try {
+                    changeLoginPhone(superAdmin, ownerId, newPhone, verificationId).andExpect(status().isOk());
+                    Future<MvcResult> confirming = executor.submit(
+                            () -> confirm(loginVerificationId, code).andReturn());
+                    try {
+                        confirming.get(1, TimeUnit.SECONDS);
+                    } catch (TimeoutException waitingForLock) {
+                        // 업체 행 잠금을 기다리는 중 - 번호 변경이 끝나야 진행
+                    }
+                    return confirming;
+                } catch (Exception e) {
+                    throw new IllegalStateException(e);
+                }
+            });
+
+            MvcResult result = login.get(10, TimeUnit.SECONDS);
+            assertThat(result.getResponse().getStatus()).isEqualTo(404);
+            assertThat(result.getResponse().getContentAsString()).contains("OWNER_NOT_REGISTERED");
+            assertThat(liveOwnerTokens(ownerId)).isZero();
+            assertThat(owner(ownerId)).containsEntry("phone", newPhone);
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     @Test
