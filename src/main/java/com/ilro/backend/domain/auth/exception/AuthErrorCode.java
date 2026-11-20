@@ -30,7 +30,9 @@ public enum AuthErrorCode implements ErrorCode {
     // result: rejectionReason
     OWNER_REJECTED(HttpStatus.FORBIDDEN, "OWNER_REJECTED", "가입 신청이 거절됐어요"),
     OWNER_RESTRICTED(HttpStatus.FORBIDDEN, "OWNER_RESTRICTED", "이용이 제한된 계정이에요. 운영팀에 문의해 주세요"),
-    OWNER_WITHDRAWN(HttpStatus.FORBIDDEN, "OWNER_WITHDRAWN", "탈퇴한 계정이에요");
+    OWNER_WITHDRAWN(HttpStatus.FORBIDDEN, "OWNER_WITHDRAWN", "탈퇴한 계정이에요"),
+    // SUPER 운영자만 쓰는 기능(로그인 번호 변경·접근 기록·삭제)을 STAFF가 부름 (BE-17)
+    ADMIN_ROLE_REQUIRED(HttpStatus.FORBIDDEN, "ADMIN_ROLE_REQUIRED", "이 기능은 최고 운영자만 쓸 수 있습니다");
 
     private final HttpStatus status;
     private final String code;

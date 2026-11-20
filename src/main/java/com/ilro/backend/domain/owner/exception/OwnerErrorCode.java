@@ -18,7 +18,10 @@ public enum OwnerErrorCode implements ErrorCode {
     OWNER_PHONE_DUPLICATED(HttpStatus.CONFLICT, "OWNER_PHONE_DUPLICATED", "같은 로그인 번호로 등록된 업체가 있습니다"),
     WORK_TYPE_DUPLICATED(HttpStatus.CONFLICT, "WORK_TYPE_DUPLICATED", "이미 등록된 작업 종류입니다"),
     SERVICE_AREA_DUPLICATED(HttpStatus.CONFLICT, "SERVICE_AREA_DUPLICATED", "이미 등록된 서비스 지역입니다"),
-    OWNER_NOT_APPROVED(HttpStatus.CONFLICT, "OWNER_NOT_APPROVED", "승인된 업체에만 접수 링크를 발급할 수 있습니다");
+    // 승인 전에 운영 상태 변경·접수 링크 발급 (명세 3.7)
+    OWNER_NOT_APPROVED(HttpStatus.CONFLICT, "OWNER_NOT_APPROVED", "승인된 업체에만 할 수 있는 작업입니다"),
+    // result: approvalStatus - 이미 승인·거절한 신청을 다시 심사 (BE-17)
+    OWNER_ALREADY_REVIEWED(HttpStatus.CONFLICT, "OWNER_ALREADY_REVIEWED", "이미 심사를 마친 신청입니다");
 
     private final HttpStatus status;
     private final String code;

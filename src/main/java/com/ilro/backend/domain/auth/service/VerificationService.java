@@ -17,6 +17,7 @@ import com.ilro.backend.domain.inquiry.exception.InquiryErrorCode;
 import com.ilro.backend.domain.inquiry.repository.InquiryRepository;
 import com.ilro.backend.domain.inquiry.service.InquiryAccess;
 import com.ilro.backend.domain.owner.entity.Owner;
+import com.ilro.backend.domain.owner.exception.OwnerErrorCode;
 import com.ilro.backend.domain.owner.repository.OwnerRepository;
 import com.ilro.backend.global.auth.AuthPrincipal;
 import com.ilro.backend.global.common.response.FieldErrorResponse;
@@ -40,7 +41,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
-// 6자리 문자 인증 (명세 5.1) - 사장님·운영자 로그인(BE-02), 고객 번호 확인·상담 복구·예약 조회(BE-18)
+// 6자리 문자 인증 (명세 5.1) - 사장님·운영자 로그인(BE-02), 고객 번호 확인·상담 복구·예약 조회(BE-18),
+// 운영팀의 사장님 번호 확인(OWNER_SIGNUP, BE-17)
 // 목적마다 대상이 정해짐: 사장님 로그인은 그 업체, 예약 전 번호 확인은 문의 토큰의 문의, 상담 복구·예약 조회는 링크의 업체
 // 고객 인증으로는 사장님 토큰을 만들지 않고, 고객 토큰은 인증한 번호 + 그 업체 + 그 목적으로만 쓰임
 // 발송 실패·틀린 입력도 기록이 남아야 하므로(누적 제한·시도 횟수) 저장을 먼저 끝내고 트랜잭션 밖에서 오류를 던짐
@@ -70,14 +72,18 @@ public class VerificationService {
     private final TransactionTemplate transactionTemplate;
     private final Clock clock;
 
-    // inquiryToken: Authorization 헤더의 토큰 - 예약 전 번호 확인(CUSTOMER_VERIFY)에만 씀, 없으면 null
+    // inquiryToken: Authorization 헤더의 토큰 - 없으면 null
+    //   예약 전 번호 확인(CUSTOMER_VERIFY)은 문의 토큰, 사장님 번호 확인(OWNER_SIGNUP)은 운영자 토큰이어야 함
     public SendVerificationResponse send(SendVerificationRequest request, String requestIp, String inquiryToken) {
         String phone = PhoneNumbers.normalize(request.phone());
         if (!PhoneNumbers.isMobile(phone)) {
             throw new BusinessException(CommonErrorCode.INVALID_INPUT,
                     List.of(new FieldErrorResponse("phone", "휴대전화번호 형식이 아닙니다")));
         }
-        // 문의 토큰·링크 확인은 발송 제한보다 먼저 - 토큰 없이 남의 문의로 문자를 보내지 못하게
+        // 문의 토큰·운영자 토큰·링크 확인은 발송 제한보다 먼저 - 토큰 없이 남의 문의·임의 번호로 문자를 보내지 못하게
+        if (request.purpose() == VerificationPurpose.OWNER_SIGNUP) {
+            requireAdmin(inquiryToken);
+        }
         Long inquiryId = request.purpose() == VerificationPurpose.CUSTOMER_VERIFY ? inquiryOf(inquiryToken) : null;
         String linkToken = isLinkPurpose(request.purpose()) ? requireLinkToken(request.linkToken()) : null;
         PhoneVerification verification = transactionTemplate.execute(
@@ -123,8 +129,14 @@ public class VerificationService {
             case CUSTOMER_VERIFY -> Target.inquiry(verifiableInquiry(inquiryId, phone));
             // 이 번호의 문의·예약이 그 업체에 있는지는 보내기 전에 알려 주지 않음 (번호만으로 상담 여부를 알 수 없게)
             case INQUIRY_ACCESS, RESERVATION_LOOKUP -> Target.owner(linkOwner(linkToken));
-            default -> throw new BusinessException(CommonErrorCode.INVALID_INPUT,
-                    List.of(new FieldErrorResponse("purpose", "아직 지원하지 않는 인증 목적입니다")));
+            // 운영팀이 아직 등록 안 된 사장님 번호를 확인 (업체 등록 B-01·로그인 번호 변경 O-03, BE-17)
+            // 이미 어느 업체의 로그인 번호면 등록·변경에 쓸 수 없으니 문자 없이 409
+            case OWNER_SIGNUP -> {
+                if (ownerRepository.existsByPhone(phone)) {
+                    throw new BusinessException(OwnerErrorCode.OWNER_PHONE_DUPLICATED);
+                }
+                yield Target.NONE;
+            }
         };
 
         String code = verificationCodes.generate();
@@ -142,6 +154,13 @@ public class VerificationService {
                 .targetInquiry(target.inquiry())
                 .requestIp(requestIp)
                 .build());
+    }
+
+    // 사장님 번호 확인(OWNER_SIGNUP)은 운영자 토큰으로만 - 토큰 없음 401, 다른 종류 토큰 403
+    private void requireAdmin(String token) {
+        if (authTokenService.authenticate(token).type() != AuthTokenType.ADMIN) {
+            throw new BusinessException(CommonErrorCode.FORBIDDEN);
+        }
     }
 
     // 예약 전 번호 확인은 문의 토큰으로만 - 사장님·고객(cus_) 토큰은 403
@@ -276,7 +295,8 @@ public class VerificationService {
                 yield ConfirmVerificationResponse.customerToken(verification.getPurpose(),
                         authTokenService.issueCustomerToken(owner, verification.getPhone(), scope));
             }
-            default -> throw new BusinessException(AuthErrorCode.VERIFICATION_NOT_FOUND);
+            // 그 번호가 문자를 받는다는 확인뿐 - 토큰도 업체 권한도 만들지 않음 (등록·번호 변경 때 인증 ID로 확인)
+            case OWNER_SIGNUP -> ConfirmVerificationResponse.phoneConfirmed(VerificationPurpose.OWNER_SIGNUP, now);
         };
     }
 

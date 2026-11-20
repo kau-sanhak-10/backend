@@ -423,12 +423,14 @@ class AuthFlowTest {
     }
 
     @Test
-    @DisplayName("아직 없는 인증 목적·모르는 목적 값·6자리가 아닌 번호는 400")
+    @DisplayName("모르는 목적 값·6자리가 아닌 번호는 400, 운영자 토큰 없는 사장님 번호 확인(OWNER_SIGNUP)은 문자 없이 401")
     void unsupportedInputs() throws Exception {
-        sendCode("OWNER_SIGNUP", accounts.newPhone())
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("INVALID_INPUT"))
-                .andExpect(jsonPath("$.result[0].field").value("purpose"));
+        // 운영자만 보낼 수 있음 (BE-17) - 운영자 토큰으로 보내는 흐름은 AdminOwnerFlowTest
+        String signupPhone = accounts.newPhone();
+        sendCode("OWNER_SIGNUP", signupPhone)
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+        assertThat(smsSender.hasSentTo(signupPhone)).isFalse();
         sendCode("SUPER_LOGIN", accounts.newPhone())
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("INVALID_INPUT"));

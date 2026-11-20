@@ -50,11 +50,22 @@ public class TestAccounts {
         return ownerId;
     }
 
+    // API로 만든 업체(운영팀 등록 등)도 끝나고 지우게 등록
+    public void trackOwner(long ownerId) {
+        ownerIds.add(ownerId);
+    }
+
     public long admin(String phone) {
         long adminId = jdbc.queryForObject(
                 "INSERT INTO admin (name, phone) VALUES ('운영자', ?) RETURNING id", Long.class, phone);
         adminIds.add(adminId);
         return adminId;
+    }
+
+    // 운영자 토큰 - role은 SUPER 또는 STAFF
+    public String adminToken(long adminId, String role) {
+        jdbc.update("UPDATE admin SET role = ? WHERE id = ?", role, adminId);
+        return token("ADMIN", null, adminId, null, null, "CURRENT_TIMESTAMP + interval '1 day'");
     }
 
     // 로그인 흐름 없이 바로 쓰는 사장님 토큰 (원문 반환, DB에는 해시)
