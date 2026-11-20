@@ -270,7 +270,10 @@ public class VerificationService {
         return switch (verification.getPurpose()) {
             case OWNER_LOGIN -> {
                 // 보낸 뒤 로그인 번호가 바뀌었거나 이용 제한이 됐으면 로그인하지 않음
-                Owner owner = verification.getTargetOwner();
+                // 업체 행을 잠근 채로 번호·상태를 보고 토큰을 만듦 - 운영팀의 번호 변경·이용 제한(같은 잠금, 기존 토큰을 끊음)과
+                // 차례로 처리돼, 토큰을 끊은 뒤에 옛 번호로 새 토큰이 나가는 일이 없음
+                Owner target = verification.getTargetOwner();
+                Owner owner = target == null ? null : ownerRepository.findByIdForUpdate(target.getId()).orElse(null);
                 if (owner == null || !verification.getPhone().equals(owner.getPhone())) {
                     throw new BusinessException(AuthErrorCode.OWNER_NOT_REGISTERED);
                 }
