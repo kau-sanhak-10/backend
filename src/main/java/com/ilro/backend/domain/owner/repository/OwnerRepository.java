@@ -4,6 +4,7 @@ import com.ilro.backend.domain.owner.entity.Owner;
 import jakarta.persistence.LockModeType;
 import jakarta.persistence.QueryHint;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.repository.QueryHints;
@@ -11,10 +12,14 @@ import org.springframework.data.repository.query.Param;
 
 import java.util.Optional;
 
-public interface OwnerRepository extends JpaRepository<Owner, Long> {
+// JpaSpecificationExecutor: 운영 업체 목록(O-01)의 선택 조건(심사 상태·운영 상태·검색어)을 조합해 찾음
+public interface OwnerRepository extends JpaRepository<Owner, Long>, JpaSpecificationExecutor<Owner> {
 
     // 로그인 번호로 찾기 - phone은 숫자만으로 정규화한 값
     Optional<Owner> findByPhone(String phone);
+
+    // 같은 로그인 번호의 업체가 있는지 (uq_owner_phone) - 등록·번호 변경 전에 미리 확인
+    boolean existsByPhone(String phone);
 
     // 고객 접수 링크 (C-01)
     Optional<Owner> findByLinkToken(String linkToken);
