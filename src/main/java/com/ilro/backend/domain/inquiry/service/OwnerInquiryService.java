@@ -8,6 +8,7 @@ import com.ilro.backend.domain.inquiry.dto.OwnerHomeResponse;
 import com.ilro.backend.domain.inquiry.dto.OwnerHomeResponse.TodayVisit;
 import com.ilro.backend.domain.inquiry.dto.OwnerInquiryDetailResponse;
 import com.ilro.backend.domain.inquiry.dto.OwnerInquiryDetailResponse.AiSummary;
+import com.ilro.backend.domain.inquiry.dto.OwnerInquiryDetailResponse.FieldDetail;
 import com.ilro.backend.domain.inquiry.dto.OwnerInquiryListResponse;
 import com.ilro.backend.domain.inquiry.dto.OwnerUpdateInquiryRequest;
 import com.ilro.backend.domain.inquiry.dto.OwnerUpdateInquiryRequest.OwnerVisitInfo;
@@ -195,8 +196,9 @@ public class OwnerInquiryService {
                 .map(Consent::getConsentType)
                 .distinct()
                 .toList();
-        return OwnerInquiryDetailResponse.of(inquiry, fieldRepository.findAllOf(inquiryId),
-                aiSummary(inquiry, decision),
+        List<FieldDetail> fields = OwnerInquiryDetailResponse.fieldDetails(fieldRepository.findAllOf(inquiryId));
+        // 오류코드 공식 설명(AI-14)은 여기서 붙이지 않음 - 이 트랜잭션이 끝난 뒤 컨트롤러에서 (OfficialErrorCodeAttacher)
+        return OwnerInquiryDetailResponse.of(inquiry, fields, aiSummary(inquiry, decision),
                 photoRepository.findByInquiryIdAndUploadStatusAndMessageIsNotNullOrderByIdAsc(
                         inquiryId, PhotoUploadStatus.DONE),
                 handoffRepository.findByInquiryIdOrderByIdDesc(inquiryId),

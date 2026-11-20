@@ -1,6 +1,7 @@
 package com.ilro.backend.domain.inquiry.dto;
 
 import com.ilro.backend.domain.ai.entity.AiAction;
+import com.ilro.backend.domain.boiler.dto.OfficialErrorCodeResponse;
 import com.ilro.backend.domain.customer.entity.Customer;
 import com.ilro.backend.domain.inquiry.dto.InquiryDetailResponse.LinkedReservation;
 import com.ilro.backend.domain.inquiry.dto.InquiryDetailResponse.VisitInfo;
@@ -25,12 +26,14 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 // 사장님 문의 상세 (B-13) - 고객·방문정보, 항목별 값·출처·확인 여부·미확인 이유·수정 이력,
-// AI 요약(사실·해석 구분), 사진, 상담·회신 요청, 연결 예약
+// AI 요약(사실·해석 구분), 오류코드 공식 설명, 사진, 상담·회신 요청, 연결 예약
 // 대화는 따로 가져옴 (GET …/messages), version은 수정 때 그대로 보냄 (명세 1.7)
+// officialErrorCode: 오류코드 값이 있는 문의만 (없으면 null) - 매뉴얼과 셋 다 맞을 때만 MATCHED (AI-14)
 public record OwnerInquiryDetailResponse(Long inquiryId, InquiryStatus status, HandlerMode handlerMode,
                                          boolean safetyFlag, OwnerCheckReason ownerCheckReason, int version,
                                          VisitInfo visitInfo,
                                          boolean phoneVerified, List<FieldDetail> fields, AiSummary aiSummary,
+                                         OfficialErrorCodeResponse officialErrorCode,
                                          List<PhotoItem> photos, List<OwnerHandoffResponse> handoffRequests,
                                          LinkedReservation reservation, List<ConsentType> consents,
                                          OffsetDateTime createdAt, OffsetDateTime updatedAt) {
@@ -68,8 +71,16 @@ public record OwnerInquiryDetailResponse(Long inquiryId, InquiryStatus status, H
         }
     }
 
-    // fields: 이 문의의 항목 행 전부 (현재값·이력), handoffs: 최근 것부터
-    public static OwnerInquiryDetailResponse of(Inquiry inquiry, List<InquiryField> fields, AiSummary aiSummary,
+    // 공식 설명은 문의 트랜잭션이 끝난 뒤에 붙임 (OfficialErrorCodeAttacher)
+    public OwnerInquiryDetailResponse withOfficialErrorCode(OfficialErrorCodeResponse official) {
+        return new OwnerInquiryDetailResponse(inquiryId, status, handlerMode, safetyFlag, ownerCheckReason, version,
+                visitInfo, phoneVerified, fields, aiSummary, official, photos, handoffRequests, reservation,
+                consents, createdAt, updatedAt);
+    }
+
+    // fields: fieldDetails(이 문의의 항목 행 전부)로 만든 것, handoffs: 최근 것부터
+    // officialErrorCode는 비워 둠 - 트랜잭션 밖에서 withOfficialErrorCode로 채움
+    public static OwnerInquiryDetailResponse of(Inquiry inquiry, List<FieldDetail> fields, AiSummary aiSummary,
                                                 List<Photo> photos, List<HandoffRequest> handoffs,
                                                 Reservation reservation, List<ConsentType> consents,
                                                 boolean requiredWaitingOwner) {
@@ -82,12 +93,13 @@ public record OwnerInquiryDetailResponse(Long inquiryId, InquiryStatus status, H
         return new OwnerInquiryDetailResponse(inquiry.getId(), inquiry.getStatus(), inquiry.getHandlerMode(),
                 inquiry.isSafetyFlag(), OwnerCheckReason.of(inquiry, activeHandoff, requiredWaitingOwner),
                 inquiry.getVersion(), visitInfo, inquiry.getPhoneVerifiedAt() != null,
-                fieldDetails(fields), aiSummary, photos.stream().map(PhotoItem::from).toList(),
+                fields, aiSummary, null, photos.stream().map(PhotoItem::from).toList(),
                 handoffs.stream().map(OwnerHandoffResponse::from).toList(), LinkedReservation.from(reservation),
                 consents, KstTime.of(inquiry.getCreatedAt()), KstTime.of(inquiry.getUpdatedAt()));
     }
 
-    private static List<FieldDetail> fieldDetails(List<InquiryField> fields) {
+    // 항목별 현재값·이력 - fields: 이 문의의 항목 행 전부 (오래된 것부터)
+    public static List<FieldDetail> fieldDetails(List<InquiryField> fields) {
         Map<String, List<InquiryField>> byKey = fields.stream()
                 .collect(Collectors.groupingBy(InquiryField::getFieldKey));
         return Arrays.stream(InquiryFieldKey.values())

@@ -9,6 +9,7 @@ import com.ilro.backend.domain.inquiry.dto.PhotoUrlsResponse.PhotoUrl;
 import com.ilro.backend.domain.inquiry.entity.HandlerMode;
 import com.ilro.backend.domain.inquiry.entity.InquiryStatus;
 import com.ilro.backend.domain.inquiry.service.InquiryMessageService;
+import com.ilro.backend.domain.inquiry.service.OfficialErrorCodeAttacher;
 import com.ilro.backend.domain.inquiry.service.OwnerInquiryService;
 import com.ilro.backend.domain.inquiry.service.OwnerPhotoService;
 import com.ilro.backend.global.auth.AuthPrincipal;
@@ -30,6 +31,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class OwnerInquiryController {
 
     private final OwnerInquiryService inquiryService;
+    private final OfficialErrorCodeAttacher officialErrorCodes;
     private final InquiryMessageService messageService;
     private final OwnerPhotoService photoService;
 
@@ -49,10 +51,11 @@ public class OwnerInquiryController {
     }
 
     // B-13 상세: 고객·방문정보, 항목별 값·출처·이력, AI 요약(사실·해석), 사진, 상담·회신 요청, 연결 예약
+    // 오류코드 공식 설명(AI-14)은 문의 트랜잭션이 끝난 뒤 여기서 붙임 - 한 요청이 DB 연결을 둘 쥐지 않게
     @GetMapping("/inquiries/{inquiryId}")
     public ApiResponse<OwnerInquiryDetailResponse> getInquiry(AuthPrincipal principal,
                                                               @PathVariable Long inquiryId) {
-        return ApiResponse.onSuccess(inquiryService.getInquiry(principal, inquiryId));
+        return ApiResponse.onSuccess(officialErrorCodes.attach(inquiryService.getInquiry(principal, inquiryId)));
     }
 
     // B-13·B-15 대화 - afterId 다음부터
@@ -74,6 +77,7 @@ public class OwnerInquiryController {
     public ApiResponse<OwnerInquiryDetailResponse> updateInquiry(AuthPrincipal principal,
                                                                  @PathVariable Long inquiryId,
                                                                  @Valid @RequestBody OwnerUpdateInquiryRequest request) {
-        return ApiResponse.onSuccess(inquiryService.updateInquiry(principal, inquiryId, request));
+        return ApiResponse.onSuccess(
+                officialErrorCodes.attach(inquiryService.updateInquiry(principal, inquiryId, request)));
     }
 }
