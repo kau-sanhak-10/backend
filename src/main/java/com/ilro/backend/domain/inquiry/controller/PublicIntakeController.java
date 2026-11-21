@@ -5,7 +5,9 @@ import com.ilro.backend.domain.inquiry.dto.StartInquiryRequest;
 import com.ilro.backend.domain.inquiry.dto.StartInquiryResponse;
 import com.ilro.backend.domain.inquiry.service.IntakeService;
 import com.ilro.backend.global.common.response.ApiResponse;
+import com.ilro.backend.global.common.util.RequestFingerprint;
 import jakarta.validation.Valid;
+import org.springframework.http.CacheControl;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -13,6 +15,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -33,8 +36,11 @@ public class PublicIntakeController {
     // C-01·C-06 필수 동의 기록 + 문의 생성 → 문의 토큰
     @PostMapping("/inquiries")
     public ResponseEntity<ApiResponse<StartInquiryResponse>> startInquiry(
-            @PathVariable String linkToken, @Valid @RequestBody StartInquiryRequest request) {
-        StartInquiryResponse response = intakeService.startInquiry(linkToken, request);
-        return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.onSuccess(response));
+            @PathVariable String linkToken,
+            @RequestHeader(name = RequestFingerprint.IDEMPOTENCY_KEY_HEADER, required = false) String requestKey,
+            @Valid @RequestBody StartInquiryRequest request) {
+        var result = intakeService.startInquiry(linkToken, requestKey, request);
+        return ResponseEntity.status(result.created() ? HttpStatus.CREATED : HttpStatus.OK)
+                .cacheControl(CacheControl.noStore()).body(ApiResponse.onSuccess(result.response()));
     }
 }

@@ -19,6 +19,10 @@ public interface OwnerRepository extends JpaRepository<Owner, Long> {
     // 고객 접수 링크 (C-01)
     Optional<Owner> findByLinkToken(String linkToken);
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "3000"))
+    Optional<Owner> findLockedByLinkToken(String linkToken);
+
     // 일정을 바꾸는 쓰기(예약 확정·수동 예약·변경·차단·영업시간 등)는 트랜잭션 처음에 업체 행을 잠금 (명세 1.7)
     // SELECT ... FOR UPDATE, 3초 안에 못 잡으면 PessimisticLockingFailureException → 503 SERVICE_UNAVAILABLE
     @Lock(LockModeType.PESSIMISTIC_WRITE)
