@@ -229,6 +229,7 @@ public class OwnerInquiryService {
                 // 읽지 못한 기록은 해석 없이 보여 줌
             }
         }
+        boolean showNextAction = decision.hasCurrentNextAction(inquiry);
         JsonNode reason = result.path("nextAction").path("reason");
         return new AiSummary(inquiry.getAiSummary(), nodes(result.path("interpretations")),
                 nodes(result.path("conflicts")),
@@ -236,7 +237,8 @@ public class OwnerInquiryService {
                         .filter(JsonNode::isString)
                         .map(JsonNode::asString)
                         .toList(),
-                decision.getAction(), reason.isString() ? reason.asString() : null,
+                showNextAction ? decision.getAction() : null,
+                showNextAction && reason.isString() ? reason.asString() : null,
                 KstTime.of(decision.getCreatedAt()));
     }
 
