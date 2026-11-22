@@ -24,7 +24,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.notNullValue;
@@ -190,11 +189,21 @@ class OwnerWithdrawalFlowTest {
                     Future<MvcResult> starting = executor.submit(() -> mockMvc.perform(
                             post("/api/v1/public/intake/" + linkToken + "/inquiries")
                                     .contentType(MediaType.APPLICATION_JSON).content(start)).andReturn());
-                    try {
-                        starting.get(1, TimeUnit.SECONDS);
-                    } catch (TimeoutException waitingForLock) {
-                        // 업체 행 잠금을 기다리는 중 - 탈퇴가 끝나야 진행
+                    // 접수의 업체 조회가 탈퇴가 잡은 잠금을 기다리는 것을 DB에서 확인한 뒤에 탈퇴를 끝냄
+                    // (시간만 기다리면 접수가 늦게 시작해 탈퇴 뒤에 처리돼도 통과함 - 겹쳤다는 증거가 되지 않음)
+                    boolean waitingOnOwnerLock = false;
+                    long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(2500);
+                    while (!waitingOnOwnerLock && !starting.isDone() && System.nanoTime() < deadline) {
+                        // 이 트랜잭션(탈퇴)이 끝나기를 기다리는 다른 연결의 조회(select ... for update)가 있는지
+                        waitingOnOwnerLock = jdbc.queryForObject("SELECT count(*) FROM pg_locks l "
+                                + "JOIN pg_stat_activity a ON a.pid = l.pid WHERE NOT l.granted "
+                                + "AND l.locktype = 'transactionid' AND l.transactionid = pg_current_xact_id()::xid "
+                                + "AND a.query ILIKE 'select%'", Integer.class) > 0;
+                        if (!waitingOnOwnerLock) {
+                            Thread.sleep(20);
+                        }
                     }
+                    assertThat(waitingOnOwnerLock).as("접수의 업체 조회가 탈퇴의 잠금을 기다려야 함").isTrue();
                     return starting;
                 } catch (Exception e) {
                     throw new IllegalStateException(e);
