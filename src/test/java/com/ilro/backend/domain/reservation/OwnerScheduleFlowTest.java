@@ -1,5 +1,9 @@
 package com.ilro.backend.domain.reservation;
 
+import com.ilro.backend.domain.auth.exception.AuthErrorCode;
+import com.ilro.backend.domain.reservation.dto.ManualReservationRequest;
+import com.ilro.backend.domain.reservation.service.ManualReservationService;
+import com.ilro.backend.global.exception.BusinessException;
 import com.ilro.backend.support.TestAccounts;
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.AfterEach;
@@ -17,6 +21,7 @@ import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 
+import java.math.BigDecimal;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -33,6 +38,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.hasSize;
@@ -57,6 +63,9 @@ class OwnerScheduleFlowTest {
 
     @Autowired
     private JdbcTemplate jdbc;
+
+    @Autowired
+    private ManualReservationService manualReservationService;
 
     private MockMvc mockMvc;
     private TestAccounts accounts;
@@ -245,6 +254,39 @@ class OwnerScheduleFlowTest {
                     + "WHERE idempotency_key = ?)", sameKey);
             jdbc.update("DELETE FROM reservation WHERE idempotency_key = ?", sameKey);
         }
+    }
+
+    @Test
+    @DisplayName("수동 예약 좌표·업체 상태 - 지수 표기로 자릿수가 터무니없는 좌표는 400, 잠근 뒤 이용 제한이면 만들지 않음")
+    void manualCoordinateAndOwnerStatus() throws Exception {
+        // 값은 범위 안(거의 0)이지만 풀어 쓰면 20억 자 - 요청 지문을 만들기 전에 400
+        createManual(UUID.randomUUID().toString(), manual(accounts.newPhone(), null, time(monday, "10:00"), false)
+                .replace("\"lat\":37.634", "\"lat\":1E-2000000000"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.result[0].field").value("lat"));
+        createManual(UUID.randomUUID().toString(), manual(accounts.newPhone(), null, time(monday, "10:00"), false)
+                .replace("\"lng\":126.832", "\"lng\":126.832000000000000000001"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.result[0].field").value("lng"));
+        // 0으로 끝나는 자리는 세지 않고, 지도가 주는 긴 좌표(15자리)는 받음
+        createManual(UUID.randomUUID().toString(), manual(accounts.newPhone(), null, time(monday, "10:00"), false)
+                .replace("\"lat\":37.634", "\"lat\":37.634000000000000000000000")
+                .replace("\"lng\":126.832", "\"lng\":126.832000000000001"))
+                .andExpect(status().isCreated());
+        assertThat(manualCount()).isEqualTo(1);
+
+        // 요청이 들어온 뒤(권한 확인 뒤) 업체가 이용 제한이 됨 - 잠근 뒤 다시 봐서 예약을 만들지 않음
+        jdbc.update("UPDATE owner SET status = 'RESTRICTED' WHERE id = ?", ownerId);
+        ManualReservationRequest request = new ManualReservationRequest(accounts.newPhone(), null, ADDRESS,
+                new BigDecimal("37.634"), new BigDecimal("126.832"), workTypeId,
+                OffsetDateTime.parse(time(monday, "14:00")), false);
+        assertThatThrownBy(() -> manualReservationService.create(ownerId, UUID.randomUUID().toString(), request))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(AuthErrorCode.OWNER_RESTRICTED));
+        assertThat(manualCount()).isEqualTo(1);
+        jdbc.update("UPDATE owner SET status = 'ACTIVE' WHERE id = ?", ownerId);
+        assertThat(manualReservationService.create(ownerId, UUID.randomUUID().toString(), request).created())
+                .isTrue();
     }
 
     @Test

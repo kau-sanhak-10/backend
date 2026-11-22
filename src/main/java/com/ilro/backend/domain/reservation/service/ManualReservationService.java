@@ -1,5 +1,6 @@
 package com.ilro.backend.domain.reservation.service;
 
+import com.ilro.backend.domain.auth.service.OwnerAccessPolicy;
 import com.ilro.backend.domain.customer.entity.Customer;
 import com.ilro.backend.domain.customer.repository.CustomerRepository;
 import com.ilro.backend.domain.notification.entity.Notification;
@@ -31,6 +32,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -50,6 +52,8 @@ public class ManualReservationService {
 
     private static final String PATH = "/api/v1/owner/reservations";
     private static final String IDEMPOTENCY_CONSTRAINT = "uq_reservation_idempotency_key";
+    // 좌표의 소수 자릿수 한도 - 지도가 주는 좌표는 15자리 안팎. 저장은 7자리(NUMERIC(10,7))
+    private static final int MAX_COORDINATE_SCALE = 20;
 
     private final ScheduleWriter writer;
     private final VisitScheduleService visitSchedule;
@@ -59,6 +63,7 @@ public class ManualReservationService {
     private final CustomerRepository customerRepository;
     private final NotificationRepository notificationRepository;
     private final ReservationNotifier notifier;
+    private final OwnerAccessPolicy ownerAccessPolicy;
 
     // created: 새로 저장했으면 true(201), 같은 요청을 다시 받았으면 false(200)
     public record Outcome(ManualReservationResponse response, boolean created) {
@@ -74,6 +79,10 @@ public class ManualReservationService {
         if (startAt.getEpochSecond() % 60 != 0 || startAt.getNano() != 0) {
             throw invalid("startAt", "분 단위여야 합니다");
         }
+        // 값의 범위만 보면 1E-2000000000 같은 지수 표기가 통과함 - 요청 지문을 만들 때 0을 전부 풀어 써서
+        // 13자짜리 요청이 수십억 자의 문자열이 됨. 지문을 만들기 전에 자릿수를 봄
+        requireCoordinateScale("lat", request.lat());
+        requireCoordinateScale("lng", request.lng());
         String hash = RequestFingerprint.of(PATH, "OWNER:" + ownerId, canonical(request, phone, startAt));
 
         Optional<Outcome> replayed = writer.read(() -> replay(key, hash));
@@ -91,6 +100,9 @@ public class ManualReservationService {
                         if (again.isPresent()) {
                             return again.get();
                         }
+                        // 잠근 뒤의 업체 상태 - 요청이 들어온 뒤 이용 제한·탈퇴가 됐으면 예약을 만들지 않음
+                        // (탈퇴는 진행 중 예약이 없어야 하는데, 여기서 안 보면 탈퇴한 업체에 확정 예약이 생김)
+                        ownerAccessPolicy.check(owner);
                         Checked checked = check(ownerId, owner, request, startAt, answers);
                         return save(owner, checked, request, phone, startAt, key, hash);
                     });
@@ -199,6 +211,13 @@ public class ManualReservationService {
                 + ",\"lng\":" + request.lng().stripTrailingZeros().toPlainString()
                 + ",\"startAt\":" + quote(startAt.toString())
                 + ",\"workTypeId\":" + request.workTypeId() + "}";
+    }
+
+    // 소수 자릿수가 터무니없는 좌표는 400 - 0으로 끝나는 자리는 세지 않음 (37.5000 = 37.5)
+    private static void requireCoordinateScale(String field, BigDecimal value) {
+        if (value.stripTrailingZeros().scale() > MAX_COORDINATE_SCALE) {
+            throw invalid(field, "소수 " + MAX_COORDINATE_SCALE + "자리까지 보낼 수 있습니다");
+        }
     }
 
     private static String quote(String value) {
