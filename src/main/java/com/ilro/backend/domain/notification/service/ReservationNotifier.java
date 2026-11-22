@@ -19,6 +19,7 @@ import java.util.List;
 // 그래서 예약 API의 성공은 발송 결과와 상관없음
 // 중복 키: RESERVATION:{예약ID}:{사건}[:{변경ID}]:{수신자}:{채널} - 같은 사건은 하나만 (uq_notification_dedupe_key)
 //   변경 사건은 예약 하나에 여러 번 생기므로 변경 ID를 넣음
+//   제안은 같은 변경 안에서 내용을 바꿔 다시 낼 수 있어 제안 당시 예약 버전까지 넣음 (바꿀 때마다 버전이 오름)
 // 고객 문자는 보낼 때 예약에 저장된 고객 번호로 (여기에는 번호를 남기지 않음) - 고객이 없는 예약이면 고객 알림을 만들지 않음
 @Component
 @RequiredArgsConstructor
@@ -48,9 +49,10 @@ public class ReservationNotifier {
     }
 
     // 사장님 시간 제안 (B-19·B-21) - 고객 문자 (눌러도 자동으로 수락하지 않음)
+    // 제안을 다른 내용으로 바꾸면(10:00 → 14:00) 고객에게 다시 알림 - 같은 제안을 다시 보낸 것은 여기까지 오지 않음
     public List<Notification> changeProposed(ReservationChange change) {
         return record(change.getReservation(), NotificationEventType.CHANGE_PROPOSED,
-                "CHANGE_PROPOSED:" + change.getId(), CUSTOMER_SMS);
+                "CHANGE_PROPOSED:" + change.getId() + ":V" + change.getBaseVersion(), CUSTOMER_SMS);
     }
 
     // 변경 확정 (C-17) - 고객 문자 + 사장님 푸시

@@ -11,6 +11,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -22,7 +23,14 @@ import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.temporal.TemporalAdjusters;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.contains;
@@ -143,6 +151,100 @@ class OwnerScheduleFlowTest {
                 Integer.class, ownerId, phone)).isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT name FROM customer WHERE owner_id = ? AND phone = ?", String.class,
                 ownerId, phone)).isEqualTo("박고객");
+    }
+
+    @Test
+    @DisplayName("자정 가까이의 수동 예약 - 자정에 끝나는 방문을 받고, 자정 너머 가까운 앞뒤 방문과의 여유·이동시간도 봄")
+    void manualNearMidnight() throws Exception {
+        // 화요일 00:10 방문이 이미 있음 (같은 좌표, 이동 0분·여유 15분)
+        long customerId = jdbc.queryForObject("INSERT INTO customer (owner_id, name, phone) VALUES (?, '김고객', ?) "
+                + "RETURNING id", Long.class, ownerId, accounts.newPhone());
+        jdbc.update("INSERT INTO reservation (owner_id, customer_id, start_at, end_at, address, lat, lng, status, "
+                + "work_type_id, work_minutes, is_manual) VALUES (?, ?, ?, ?, ?, 37.634, 126.832, 'CONFIRMED', ?, 60, "
+                + "true)", ownerId, customerId, at(monday.plusDays(1), 0, 10), at(monday.plusDays(1), 1, 10), ADDRESS,
+                workTypeId);
+
+        // 월요일 23:00~24:00 - 끝난 뒤 여유 15분이면 00:15라 다음 날 00:10 방문에 못 감 (전에는 그날 일정만 봐서 통과)
+        assertManualBlocked(time(monday, "23:00"), true, "TRAVEL_CONFLICT");
+        // 22:30~23:30은 23:45에 갈 수 있음
+        createManual(UUID.randomUUID().toString(), manual(accounts.newPhone(), null, time(monday, "22:30"), true))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.result.outsideBusinessHours").value(true));
+
+        // 수요일 23:00~24:00 - 자정에 끝나는 방문도 받음 (전에는 하루 끝을 23:59:59로 봐서 영업시간 밖)
+        long late = reservationId(createManual(UUID.randomUUID().toString(), manual(accounts.newPhone(), null,
+                time(monday.plusDays(2), "23:00"), true))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.result.endAt").value(time(monday.plusDays(3), "00:00")))
+                .andExpect(jsonPath("$.result.outsideBusinessHours").value(true)));
+        assertThat(jdbc.queryForObject("SELECT outside_business_hours FROM reservation WHERE id = ?", Boolean.class,
+                late)).isTrue();
+        // 자정을 넘기는 방문은 받지 않음
+        assertManualBlocked(time(monday.plusDays(4), "23:30"), true, "OUTSIDE_BUSINESS_HOURS");
+        // 목요일 00:05 - 전날 24:00에 끝난 방문 뒤 여유 15분이 안 됨, 00:15는 됨
+        assertManualBlocked(time(monday.plusDays(3), "00:05"), true, "TRAVEL_CONFLICT");
+        createManual(UUID.randomUUID().toString(), manual(accounts.newPhone(), null,
+                time(monday.plusDays(3), "00:15"), true))
+                .andExpect(status().isCreated());
+        // 영업시간 안의 방문은 전날 저녁·다음 날 아침 방문과 멀어 그대로 (그날 일정만 봄)
+        createManual(UUID.randomUUID().toString(), manual(accounts.newPhone(), null,
+                time(monday.plusDays(3), "09:00"), false))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.result.outsideBusinessHours").value(false));
+    }
+
+    @Test
+    @DisplayName("수동 예약 다시 보내기 - 영업시간 밖 여부는 등록할 때 값 그대로, 같은 키를 동시에 보내도 하나만 만들고 둘 다 성공")
+    void manualReplay() throws Exception {
+        // 영업시간 안에 등록 → 그 뒤 영업시간이 12시부터로 바뀌어도 다시 보낸 결과는 처음과 같음
+        String key = UUID.randomUUID().toString();
+        String body = manual(accounts.newPhone(), null, time(monday, "10:00"), false);
+        createManual(key, body)
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.result.outsideBusinessHours").value(false));
+        jdbc.update("UPDATE owner_business_hour SET open_time = '12:00' WHERE owner_id = ? AND day_of_week = 1",
+                ownerId);
+        createManual(key, body)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.outsideBusinessHours").value(false));
+
+        // 같은 키의 같은 요청 둘이 동시에 - 뒤 요청이 앞 요청이 잡은 시간을 '그 시간 참'(409)으로 보지 않고 같은 예약으로 답함
+        for (int round = 0; round < 5; round++) {
+            String sameKey = UUID.randomUUID().toString();
+            String same = manual(accounts.newPhone(), null, time(monday.plusDays(1 + round % 4), "15:00"), false);
+            ExecutorService pool = Executors.newFixedThreadPool(2);
+            try {
+                CountDownLatch go = new CountDownLatch(1);
+                List<Future<MockHttpServletResponse>> futures = new ArrayList<>();
+                for (int i = 0; i < 2; i++) {
+                    futures.add(pool.submit(() -> {
+                        go.await();
+                        return createManual(sameKey, same).andReturn().getResponse();
+                    }));
+                }
+                go.countDown();
+                List<Integer> statuses = new ArrayList<>();
+                List<Long> ids = new ArrayList<>();
+                for (Future<MockHttpServletResponse> future : futures) {
+                    MockHttpServletResponse response = future.get(30, TimeUnit.SECONDS);
+                    statuses.add(response.getStatus());
+                    assertThat(response.getStatus()).as(response.getContentAsString()).isIn(200, 201);
+                    ids.add(((Number) JsonPath.read(response.getContentAsString(), "$.result.reservationId"))
+                            .longValue());
+                }
+                assertThat(statuses).contains(201);
+                assertThat(ids.get(0)).isEqualTo(ids.get(1));
+                assertThat(jdbc.queryForObject("SELECT count(*) FROM reservation WHERE idempotency_key = ?",
+                        Integer.class, sameKey)).isEqualTo(1);
+            } finally {
+                pool.shutdownNow();
+            }
+            jdbc.update("DELETE FROM notification WHERE owner_id = ? AND ref_type = 'RESERVATION' AND ref_id IN "
+                    + "(SELECT id FROM reservation WHERE idempotency_key = ?)", ownerId, sameKey);
+            jdbc.update("DELETE FROM reservation_history WHERE reservation_id IN (SELECT id FROM reservation "
+                    + "WHERE idempotency_key = ?)", sameKey);
+            jdbc.update("DELETE FROM reservation WHERE idempotency_key = ?", sameKey);
+        }
     }
 
     @Test

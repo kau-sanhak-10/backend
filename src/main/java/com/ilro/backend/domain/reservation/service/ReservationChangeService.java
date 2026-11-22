@@ -28,11 +28,14 @@ import com.ilro.backend.domain.reservation.repository.ReservationRepository;
 import com.ilro.backend.domain.reservation.service.BookingEligibility.ServiceAreaJudge;
 import com.ilro.backend.global.auth.AuthPrincipal;
 import com.ilro.backend.global.common.response.FieldErrorResponse;
+import com.ilro.backend.global.common.util.KstTime;
 import com.ilro.backend.global.exception.BusinessException;
 import com.ilro.backend.global.exception.CommonErrorCode;
 import com.ilro.backend.global.exception.ErrorCode;
 import com.ilro.backend.infra.map.GeoPoint;
 import com.ilro.backend.infra.map.ServiceAreaMatch;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -73,6 +76,7 @@ public class ReservationChangeService {
     private final OwnerServiceAreaRepository serviceAreaRepository;
     private final CustomerReservationAccess customerAccess;
     private final ReservationNotifier notifier;
+    private final EntityManager entityManager;
     private final Clock clock;
 
     // ---------- 1. 고객 변경 요청 (C-15) ----------
@@ -87,7 +91,7 @@ public class ReservationChangeService {
             Reservation reservation = customerAccess.find(principal, reservationId);
             requireChangeable(reservation);
             ReservationCancelService.checkVersion(reservation, request.baseVersion());
-            requireNoActiveChange(reservation);
+            requireNoActiveChange(reservation, true);
             ChangeRequestRequest.AddressChange address = request.addressChange();
             ReservationChange change = changeRepository.saveAndFlush(ReservationChange.builder()
                     .reservation(reservation)
@@ -97,9 +101,9 @@ public class ReservationChangeService {
                     .prevStartAt(reservation.getStartAt())
                     .prevEndAt(reservation.getEndAt())
                     .prevAddress(reservation.getAddress())
-                    .proposedAddress(address == null ? null : address.fullAddress())
-                    .proposedLat(address == null ? null : address.lat())
-                    .proposedLng(address == null ? null : address.lng())
+                    .requestedAddress(address == null ? null : address.fullAddress())
+                    .requestedLat(address == null ? null : address.lat())
+                    .requestedLng(address == null ? null : address.lng())
                     .baseVersion(reservation.getVersion())
                     .build());
             notifier.changeRequested(change);
@@ -117,16 +121,24 @@ public class ReservationChangeService {
         return writer.write(ownerId,
                 answers -> {
                     Reservation reservation = ownedReservation(ownerId, reservationId);
-                    Proposal proposal = proposal(reservation, request, startAt);
-                    throwIfBlocked(evaluate(reservation, proposal.plan(), answers));
+                    Proposal proposal = proposal(reservation, request, startAt, false);
+                    if (!proposal.resent()) {
+                        throwIfBlocked(evaluate(reservation, proposal.plan(), answers));
+                    }
                     return null;
                 },
                 (owner, ignored, answers) -> {
                     Reservation reservation = ownedReservation(ownerId, reservationId);
-                    Proposal proposal = proposal(reservation, request, startAt);
+                    Proposal proposal = proposal(reservation, request, startAt, true);
+                    // 같은 제안을 다시 보냄 - 새 제안·새 알림을 만들지 않고 지금 제안 그대로
+                    if (proposal.resent()) {
+                        return ChangeSnapshot.from(proposal.change());
+                    }
                     throwIfBlocked(evaluate(reservation, proposal.plan(), answers));
                     Plan plan = proposal.plan();
                     ReservationChange change = proposal.change();
+                    // 답을 기다리던 제안을 다른 내용으로 바꾸는지 (기한이 지난 제안을 다시 내는 것 포함)
+                    boolean replacing = change != null && change.getStatus() == ReservationChangeStatus.PROPOSED;
                     if (change == null) {
                         change = ReservationChange.builder()
                                 .reservation(reservation)
@@ -141,35 +153,51 @@ public class ReservationChangeService {
                     change.propose(plan.startAt(), plan.endAt(), plan.addressChanged() ? plan.address() : null,
                             plan.addressChanged() ? plan.lat() : null, plan.addressChanged() ? plan.lng() : null,
                             proposal.expiresAt());
+                    if (replacing) {
+                        // 예약 version을 올리고 제안도 그 버전으로 맞춤 - 고객이 앞 제안(14:00)을 보고 누른 수락이
+                        // 바뀐 제안(16:00)에 적용되지 않고 버전 충돌이 되어, 바뀐 제안을 다시 보게 됨
+                        entityManager.flush();
+                        entityManager.lock(reservation, LockModeType.PESSIMISTIC_FORCE_INCREMENT);
+                        change.rebase(reservation.getVersion());
+                    }
                     change = changeRepository.saveAndFlush(change);
                     notifier.changeProposed(change);
                     return ChangeSnapshot.from(change);
                 });
     }
 
-    // 제안 대상과 검사할 시간·주소
-    private record Proposal(ReservationChange change, Plan plan, Instant expiresAt) {
+    // 제안 대상과 검사할 시간·주소 - resent면 지금 답을 기다리는 제안과 같은 내용을 다시 보낸 것 (plan·expiresAt 없음)
+    private record Proposal(ReservationChange change, Plan plan, Instant expiresAt, boolean resent) {
     }
 
-    private Proposal proposal(Reservation reservation, ChangeProposalRequest request, Instant startAt) {
+    // write: 잠근 뒤(쓰기 트랜잭션)면 true - 기한이 지난 제안을 만료로 바꿈. 잠그기 전 검사는 읽기만
+    private Proposal proposal(Reservation reservation, ChangeProposalRequest request, Instant startAt,
+                              boolean write) {
         requireChangeable(reservation);
-        ReservationCancelService.checkVersion(reservation, request.baseVersion());
+        Instant now = clock.instant();
         ReservationChange change = null;
         if (request.changeId() != null) {
             change = changeOf(reservation, request.changeId());
+            // 같은 제안을 다시 보냄(재시도) - 버전 확인보다 먼저 봄: 제안을 바꾸면서 예약 version이 올랐어도 같은 답
+            // 기한이 지난 제안을 같은 내용으로 다시 내는 것은 새 제안 (기한을 새로 잡고 알림도 다시)
+            if (change.proposes(startAt, request.applyAddressChange()) && !change.isExpiredProposal(now)) {
+                return new Proposal(change, null, null, true);
+            }
+        }
+        ReservationCancelService.checkVersion(reservation, request.baseVersion());
+        if (change != null) {
             // 고객 요청에 답하거나(REQUESTED) 아직 답이 없는 제안을 새 시간으로 바꿈(PROPOSED)
             if (change.getStatus() != ReservationChangeStatus.REQUESTED
                     && change.getStatus() != ReservationChangeStatus.PROPOSED) {
                 throw changeError(ReservationErrorCode.CHANGE_ALREADY_RESOLVED, change);
             }
         } else {
-            requireNoActiveChange(reservation);
+            requireNoActiveChange(reservation, write);
         }
         boolean addressChanged = request.applyAddressChange();
-        if (addressChanged && (change == null || change.getProposedAddress() == null)) {
+        if (addressChanged && (change == null || change.getRequestedAddress() == null)) {
             throw invalid("applyAddressChange", "고객이 요청한 주소 변경이 없습니다");
         }
-        Instant now = clock.instant();
         Instant expiresAt = min(now.plus(PROPOSAL_TTL), startAt.minus(PROPOSAL_CUTOFF));
         // 방문 2시간 전보다 가까우면 기한이 없음 - 문자로 기다리지 않고 고객과 직접 조율
         if (!expiresAt.isAfter(now)) {
@@ -177,10 +205,10 @@ public class ReservationChangeService {
         }
         Instant endAt = startAt.plus(Duration.ofMinutes(workMinutes(reservation)));
         Plan plan = addressChanged
-                ? new Plan(startAt, endAt, true, change.getProposedAddress(), change.getProposedLat(),
-                change.getProposedLng())
+                ? new Plan(startAt, endAt, true, change.getRequestedAddress(), change.getRequestedLat(),
+                change.getRequestedLng())
                 : new Plan(startAt, endAt, false, reservation.getAddress(), reservation.getLat(), reservation.getLng());
-        return new Proposal(change, plan, expiresAt);
+        return new Proposal(change, plan, expiresAt, false);
     }
 
     // ---------- 3. 고객 수락 + 최종 검사 + 변경 확정 (C-17) ----------
@@ -193,7 +221,10 @@ public class ReservationChangeService {
                     // 지도 답만 미리 받아 둠 - 판단은 잠근 뒤
                     Reservation reservation = customerAccess.find(principal, reservationId);
                     ReservationChange change = changeOf(reservation, changeId);
-                    if (change.getStatus() == ReservationChangeStatus.PROPOSED && reservation.isConfirmed()) {
+                    // 기한이 지난 제안은 지도를 부르지 않음 - 지도 장애 때문에 만료(CHANGE_EXPIRED) 대신 503이 나가고
+                    // 제안이 PROPOSED로 남지 않게 (잠근 뒤 기한 확인에서 만료로 바꿈)
+                    if (change.getStatus() == ReservationChangeStatus.PROPOSED && reservation.isConfirmed()
+                            && !change.isExpiredProposal(clock.instant())) {
                         evaluate(reservation, Plan.of(change, reservation), answers);
                     }
                     return null;
@@ -213,9 +244,9 @@ public class ReservationChangeService {
                                        ChangeAcceptRequest request, ScheduleWriter.MapAnswers answers) {
         Reservation reservation = customerAccess.find(principal, reservationId);
         ReservationChange change = changeOf(reservation, changeId);
-        // 같은 수락을 다시 받음 - 처음 결과
+        // 같은 수락을 다시 받음 - 처음 결과 (그 뒤 예약이 취소·변경됐어도 수락했을 때의 예약 모습 그대로)
         if (change.getStatus() == ReservationChangeStatus.APPLIED) {
-            return new AcceptOutcome(accepted(change, reservation), null);
+            return new AcceptOutcome(firstAccepted(change, reservation), null);
         }
         // 버전부터 - 취소와 동시에 오면 먼저 끝난 쪽이 버전을 올려 뒤의 요청은 버전 충돌 (명세 5.4)
         ReservationCancelService.checkVersion(reservation, request.baseVersion());
@@ -256,6 +287,7 @@ public class ReservationChangeService {
             return new AcceptOutcome(null, new BusinessException(verdict.code(), result));
         }
 
+        int versionBefore = reservation.getVersion();
         reservation.reschedule(plan.startAt(), plan.endAt(), plan.address(), plan.lat(), plan.lng(),
                 verdict.travelMinutes());
         change.apply(now);
@@ -267,7 +299,21 @@ public class ReservationChangeService {
                 .build());
         notifier.changeApplied(change);
         reservationRepository.flush();
+        // 제안이 지금 예약과 같은 시간·주소면 예약 행이 바뀌지 않아 version이 그대로 - 수락은 항상 version을 1 올림
+        // (수락 전 화면에서 보낸 취소·변경이 버전 충돌이 되게, 명세 5.4)
+        if (reservation.getVersion() == versionBefore) {
+            entityManager.lock(reservation, LockModeType.PESSIMISTIC_FORCE_INCREMENT);
+        }
         return new AcceptOutcome(accepted(change, reservation), null);
+    }
+
+    // 수락했을 때의 예약 모습 - 변경 기록에서 다시 만듦 (제안 시간, 반영한 주소, 수락으로 1 오른 version)
+    // 그 뒤의 지금 상태는 예약 상세 조회로 봄
+    private static ChangeAcceptResponse firstAccepted(ReservationChange change, Reservation reservation) {
+        String address = change.getProposedAddress() != null ? change.getProposedAddress() : change.getPrevAddress();
+        return new ChangeAcceptResponse(ChangeSnapshot.from(change), new ReservationSnapshot(reservation.getId(),
+                ReservationStatus.CONFIRMED, KstTime.of(change.getProposedStartAt()),
+                KstTime.of(change.getProposedEndAt()), address, change.getBaseVersion() + 1));
     }
 
     private static ChangeAcceptResponse accepted(ReservationChange change, Reservation reservation) {
@@ -278,11 +324,11 @@ public class ReservationChangeService {
 
     public ChangeSnapshot reject(AuthPrincipal principal, Long reservationId, Long changeId) {
         Long ownerId = writer.read(() -> customerAccess.find(principal, reservationId).getOwner().getId());
-        return writer.locked(ownerId, owner -> {
+        RejectOutcome outcome = writer.locked(ownerId, owner -> {
             Reservation reservation = customerAccess.find(principal, reservationId);
             ReservationChange change = changeOf(reservation, changeId);
             if (change.getStatus() == ReservationChangeStatus.REJECTED) {
-                return ChangeSnapshot.from(change);
+                return new RejectOutcome(ChangeSnapshot.from(change), null);
             }
             if (change.getStatus() == ReservationChangeStatus.REQUESTED) {
                 throw changeError(ReservationErrorCode.CHANGE_NOT_PROPOSED, change);
@@ -290,10 +336,25 @@ public class ReservationChangeService {
             if (!change.isActive()) {
                 throw changeError(ReservationErrorCode.CHANGE_ALREADY_RESOLVED, change);
             }
-            change.reject(clock.instant());
+            Instant now = clock.instant();
+            // 기한이 지난 제안은 거절이 아니라 만료 - 수락할 때와 같은 기록(EXPIRED, 시스템)을 남기고 CHANGE_EXPIRED
+            if (change.isExpiredProposal(now)) {
+                change.expire(now);
+                changeRepository.flush();
+                return new RejectOutcome(null, changeError(ReservationErrorCode.CHANGE_EXPIRED, change));
+            }
+            change.reject(now);
             changeRepository.flush();
-            return ChangeSnapshot.from(change);
+            return new RejectOutcome(ChangeSnapshot.from(change), null);
         });
+        // 만료(EXPIRED)도 저장한 뒤 오류로 알림
+        if (outcome.error() != null) {
+            throw outcome.error();
+        }
+        return outcome.change();
+    }
+
+    private record RejectOutcome(ChangeSnapshot change, BusinessException error) {
     }
 
     // ---------- 사장님 요청 닫기·목록 (B-21) ----------
@@ -413,10 +474,21 @@ public class ReservationChangeService {
         }
     }
 
-    private void requireNoActiveChange(Reservation reservation) {
+    // 진행 중인 변경이 있으면 새 요청·제안을 받지 않음 (예약당 1건, uq_reservation_change_active)
+    // 답할 기한이 지난 제안은 진행 중이 아님 - 고객 화면에도 안 보이므로, 그 제안이 새 요청을 막지 않게 여기서 만료로 바꿈
+    // (만료로 바꾸는 작업이 따로 없어 PROPOSED로 남아 있음). write가 false면 읽기 전용 검사라 바꾸지 않고 통과만
+    private void requireNoActiveChange(Reservation reservation, boolean write) {
+        Instant now = clock.instant();
         changeRepository.findFirstByReservationIdAndStatusIn(reservation.getId(),
                 CustomerReservationService.ACTIVE_CHANGE).ifPresent(active -> {
-                    throw changeError(ReservationErrorCode.CHANGE_IN_PROGRESS, active);
+                    if (!active.isExpiredProposal(now)) {
+                        throw changeError(ReservationErrorCode.CHANGE_IN_PROGRESS, active);
+                    }
+                    if (write) {
+                        // 새 행을 넣기 전에 먼저 저장 (같은 예약의 진행 중 변경은 하나뿐)
+                        active.expire(now);
+                        changeRepository.flush();
+                    }
                 });
     }
 

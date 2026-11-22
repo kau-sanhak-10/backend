@@ -86,6 +86,8 @@ public class OwnerScheduleService {
                                         && block.endAt().toInstant().isAfter(dayStart))
                                 .toList(),
                         plan.visits().stream()
+                                // 일정과 예약을 따로 읽는 사이에 취소된 예약은 뺌 (다음 조회에는 일정에서도 빠짐)
+                                .filter(visit -> reservations.containsKey(visit.reservationId()))
                                 .map(visit -> visit(visit, reservations.get(visit.reservationId()),
                                         activeChanges.get(visit.reservationId())))
                                 .toList()));

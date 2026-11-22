@@ -83,6 +83,10 @@ public class Reservation extends BaseTimeEntity {
     @Column(nullable = false)
     private boolean isManual;
 
+    // 영업시간 밖 경고를 확인하고 등록한 수동 예약 - 등록할 때의 결과 (나중에 영업시간이 바뀌어도 그대로)
+    @Column(nullable = false)
+    private boolean outsideBusinessHours;
+
     // 예약 확정 요청 키 - 반복 요청으로 중복 예약 방지 (C13)
     @Column(length = 64)
     private String idempotencyKey;
@@ -122,7 +126,8 @@ public class Reservation extends BaseTimeEntity {
     private Reservation(Inquiry inquiry, Owner owner, Customer customer, Instant startAt, Instant endAt,
                         String address, BigDecimal lat, BigDecimal lng, OwnerWorkType workType,
                         Integer travelTimeMinutes, Integer workMinutes, Integer bufferMinutes, boolean isManual,
-                        String idempotencyKey, String idempotencyHash, ReservationStatus status) {
+                        boolean outsideBusinessHours, String idempotencyKey, String idempotencyHash,
+                        ReservationStatus status) {
         if (status != null) {
             this.status = status;
         }
@@ -139,6 +144,7 @@ public class Reservation extends BaseTimeEntity {
         this.workMinutes = workMinutes;
         this.bufferMinutes = bufferMinutes;
         this.isManual = isManual;
+        this.outsideBusinessHours = outsideBusinessHours;
         this.idempotencyKey = idempotencyKey;
         this.idempotencyHash = idempotencyHash;
     }

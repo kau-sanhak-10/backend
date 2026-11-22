@@ -100,6 +100,14 @@ public class ManualReservationService {
                 return writer.read(() -> replay(key, hash)).orElseThrow(() -> e);
             }
             throw e;
+        } catch (BusinessException e) {
+            // 위의 확인과 잠그기 전 검사 사이에 같은 키의 요청이 먼저 저장을 끝냈으면, 그 예약 때문에 '그 시간 참'으로
+            // 보임 - 오류로 답하기 전에 같은 키를 다시 확인해 저장된 예약으로 답함 (지문이 다르면 IDEMPOTENCY_KEY_REUSED)
+            Optional<Outcome> saved = writer.read(() -> replay(key, hash));
+            if (saved.isPresent()) {
+                return saved.get();
+            }
+            throw e;
         }
     }
 
@@ -152,6 +160,7 @@ public class ManualReservationService {
                 .workMinutes(workMinutes)
                 .bufferMinutes(owner.getBufferMinutes())
                 .isManual(true)
+                .outsideBusinessHours(checked.outsideBusinessHours())
                 .idempotencyKey(key)
                 .idempotencyHash(hash)
                 .status(ReservationStatus.CONFIRMED)
@@ -166,7 +175,8 @@ public class ManualReservationService {
                 true);
     }
 
-    // 같은 키로 저장한 예약 - 지문이 같으면 그 예약의 지금 상태를 200으로 (영업시간 밖 여부는 지금 영업시간으로 다시 봄)
+    // 같은 키로 저장한 예약 - 지문이 같으면 그 예약의 지금 상태를 200으로
+    // 영업시간 밖 여부는 등록할 때 저장한 값 - 그 뒤 영업시간이 바뀌어도 처음 결과와 같게
     private Optional<Outcome> replay(String key, String hash) {
         return reservationRepository.findByIdempotencyKey(key).map(reservation -> {
             if (!hash.equals(reservation.getIdempotencyHash())) {
@@ -174,9 +184,8 @@ public class ManualReservationService {
             }
             List<Notification> notifications = notificationRepository.findByRefTypeAndRefIdAndEventTypeOrderByIdAsc(
                     NotificationRefType.RESERVATION, reservation.getId(), NotificationEventType.RESERVATION_CONFIRMED);
-            boolean outside = !visitSchedule.withinBusinessHours(reservation.getOwner(), reservation.getStartAt(),
-                    reservation.getEndAt());
-            return new Outcome(ManualReservationResponse.of(reservation, outside, notifications), false);
+            return new Outcome(ManualReservationResponse.of(reservation, reservation.isOutsideBusinessHours(),
+                    notifications), false);
         });
     }
 

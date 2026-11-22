@@ -167,7 +167,7 @@ class ReservationChangeFlowTest {
                 .containsEntry("version", 0)
                 .containsEntry("start_ok", true);
         assertThat(dedupeKeys(reservationId)).contains(
-                "RESERVATION:" + reservationId + ":CHANGE_PROPOSED:" + changeId + ":CUSTOMER:SMS");
+                "RESERVATION:" + reservationId + ":CHANGE_PROPOSED:" + changeId + ":V0:CUSTOMER:SMS");
 
         accept(customer, reservationId, changeId, 0)
                 .andExpect(status().isOk())
@@ -315,7 +315,7 @@ class ReservationChangeFlowTest {
     }
 
     @Test
-    @DisplayName("주소 변경 - 요청 주소는 proposed_address에만, 제안·수락 때 새 주소로 지역·이동시간 검사 후 바뀜")
+    @DisplayName("주소 변경 - 요청 주소는 requested_address에 남고, 주소를 반영한 제안·수락 때 새 주소로 지역·이동시간 검사 후 바뀜")
     void addressChange() throws Exception {
         Customer customer = customer();
         long reservationId = reservation(customer, monday, 10);
@@ -329,9 +329,11 @@ class ReservationChangeFlowTest {
         long changeId = changeId(request(customer, reservationId, "{\"addressChange\":{\"address\":"
                 + "\"경기 고양시 덕양구 ○○로 34\",\"addressDetail\":\"101동 1001호\",\"lat\":37.65,\"lng\":126.85},"
                 + "\"baseVersion\":0}").andExpect(status().isCreated()));
-        assertThat(jdbc.queryForMap("SELECT proposed_address, proposed_lat, request_note FROM reservation_change "
+        // 요청 주소는 따로 보관 - 제안 주소는 사장님이 그 주소를 반영한 제안을 할 때만
+        assertThat(jdbc.queryForMap("SELECT requested_address, proposed_address, request_note FROM reservation_change "
                 + "WHERE id = ?", changeId))
-                .containsEntry("proposed_address", "경기 고양시 덕양구 ○○로 34 101동 1001호")
+                .containsEntry("requested_address", "경기 고양시 덕양구 ○○로 34 101동 1001호")
+                .containsEntry("proposed_address", null)
                 .containsEntry("request_note", null);
         assertThat(reservationRow(reservationId)).containsEntry("address", ADDRESS);
 
@@ -343,11 +345,27 @@ class ReservationChangeFlowTest {
                 .andExpect(jsonPath("$.code").value("OUT_OF_SERVICE_AREA"));
         jdbc.update("INSERT INTO owner_service_area (owner_id, region_code, region_name) "
                 + "VALUES (?, '41281', '고양시 덕양구')", ownerId);
+
+        // 사장님이 먼저 주소는 그대로 두고 시간만 제안 - 고객이 요청한 주소는 지워지지 않음
+        propose(reservationId, proposal(changeId, time(monday, "14:00"), 0)).andExpect(status().isOk());
+        assertThat(jdbc.queryForMap("SELECT requested_address, proposed_address FROM reservation_change WHERE id = ?",
+                changeId))
+                .containsEntry("requested_address", "경기 고양시 덕양구 ○○로 34 101동 1001호")
+                .containsEntry("proposed_address", null);
+        getAs(ownerToken, "/api/v1/owner/change-requests")
+                .andExpect(jsonPath("$.result.changes[0].proposedAddress").value("경기 고양시 덕양구 ○○로 34 101동 1001호"))
+                .andExpect(jsonPath("$.result.changes[0].addressChangeApplied").value(false));
+        // 제안을 고쳐 요청 주소를 반영 (전에는 요청 주소가 지워져 400) - 제안을 바꿨으므로 예약 version이 오름
         propose(reservationId, "{\"changeId\":" + changeId + ",\"proposedStartAt\":\"" + time(monday, "10:00")
                 + "\",\"applyAddressChange\":true,\"baseVersion\":0}")
                 .andExpect(status().isOk());
+        assertThat(jdbc.queryForObject("SELECT proposed_address FROM reservation_change WHERE id = ?", String.class,
+                changeId)).isEqualTo("경기 고양시 덕양구 ○○로 34 101동 1001호");
+        getAs(ownerToken, "/api/v1/owner/change-requests")
+                .andExpect(jsonPath("$.result.changes[0].addressChangeApplied").value(true));
+        assertThat(reservationRow(reservationId)).containsEntry("version", 1).containsEntry("address", ADDRESS);
 
-        accept(customer, reservationId, changeId, 0)
+        accept(customer, reservationId, changeId, 1)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.result.reservation.address").value("경기 고양시 덕양구 ○○로 34 101동 1001호"));
         Map<String, Object> row = jdbc.queryForMap("SELECT address, lat, travel_time_minutes FROM reservation "
@@ -439,6 +457,136 @@ class ReservationChangeFlowTest {
         accept(customer, reservationId, changeId, 0)
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("CHANGE_ALREADY_RESOLVED"));
+    }
+
+    @Test
+    @DisplayName("기한 지난 제안 - 거절해도 만료로 남고(409), 새 변경 요청·새 제안을 막지 않음")
+    void expiredProposalDoesNotBlock() throws Exception {
+        Customer customer = customer();
+        long reservationId = reservation(customer, monday, 10);
+        long expiredId = proposedChange(customer, reservationId, time(monday, "14:00"));
+        jdbc.update("UPDATE reservation_change SET expires_at = CURRENT_TIMESTAMP - interval '1 minute' "
+                + "WHERE id = ?", expiredId);
+
+        // 고객 화면에는 진행 중 변경이 안 보이는데 새 요청이 CHANGE_IN_PROGRESS로 막히던 것 - 이제 받음
+        long requestedId = changeId(request(customer, reservationId, "{\"requestNote\":\"다른 날로\","
+                + "\"baseVersion\":0}").andExpect(status().isCreated()));
+        assertThat(jdbc.queryForMap("SELECT status, resolved_by FROM reservation_change WHERE id = ?", expiredId))
+                .containsEntry("status", "EXPIRED")
+                .containsEntry("resolved_by", "SYSTEM");
+        assertThat(requestedId).isNotEqualTo(expiredId);
+
+        // 거절 - 기한이 지난 제안은 거절(REJECTED·고객)이 아니라 만료(EXPIRED·시스템)로 남기고 409
+        propose(reservationId, proposal(requestedId, time(monday, "15:00"), 0)).andExpect(status().isOk());
+        jdbc.update("UPDATE reservation_change SET expires_at = CURRENT_TIMESTAMP - interval '1 minute' "
+                + "WHERE id = ?", requestedId);
+        reject(customer, reservationId, requestedId)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CHANGE_EXPIRED"))
+                .andExpect(jsonPath("$.result.change.status").value("EXPIRED"));
+        assertThat(jdbc.queryForMap("SELECT status, resolved_by FROM reservation_change WHERE id = ?", requestedId))
+                .containsEntry("status", "EXPIRED")
+                .containsEntry("resolved_by", "SYSTEM");
+        reject(customer, reservationId, requestedId)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CHANGE_ALREADY_RESOLVED"));
+
+        // 사장님의 새 제안(업체 사유)도 기한 지난 제안에 막히지 않음
+        long ownerProposal = changeId(propose(reservationId, proposal(null, time(monday, "16:00"), 0))
+                .andExpect(status().isOk()));
+        jdbc.update("UPDATE reservation_change SET expires_at = CURRENT_TIMESTAMP - interval '1 minute' "
+                + "WHERE id = ?", ownerProposal);
+        long next = changeId(propose(reservationId, proposal(null, time(monday, "17:00"), 0))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.status").value("PROPOSED")));
+        assertThat(next).isNotEqualTo(ownerProposal);
+        assertThat(jdbc.queryForObject("SELECT status FROM reservation_change WHERE id = ?", String.class,
+                ownerProposal)).isEqualTo("EXPIRED");
+        // 기한이 살아 있는 제안은 그대로 막음
+        request(customer, reservationId, "{\"requestNote\":\"또\",\"baseVersion\":0}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CHANGE_IN_PROGRESS"));
+        assertThat(reservationRow(reservationId)).containsEntry("version", 0).containsEntry("start_ok", true);
+    }
+
+    @Test
+    @DisplayName("제안을 바꿈 - 예약 version이 올라 앞 제안을 본 수락은 버전 충돌, 고객에게 다시 알림, 같은 제안을 다시 보내면 그대로")
+    void revisedProposal() throws Exception {
+        Customer customer = customer();
+        long reservationId = reservation(customer, monday, 10);
+        long changeId = proposedChange(customer, reservationId, time(monday, "14:00"));
+        String proposedKey = "RESERVATION:" + reservationId + ":CHANGE_PROPOSED:" + changeId;
+
+        // 같은 제안을 다시 보냄(재시도) - 그대로 200, 버전·알림 그대로
+        propose(reservationId, proposal(changeId, time(monday, "14:00"), 0))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.status").value("PROPOSED"));
+        assertThat(reservationRow(reservationId)).containsEntry("version", 0);
+        assertThat(dedupeKeys(reservationId)).filteredOn(key -> key.startsWith(proposedKey))
+                .containsExactly(proposedKey + ":V0:CUSTOMER:SMS");
+
+        // 14:00 → 16:00으로 바꿈 - 예약 version 0 → 1, 제안도 그 버전, 고객 문자 한 번 더
+        propose(reservationId, proposal(changeId, time(monday, "16:00"), 0)).andExpect(status().isOk());
+        assertThat(reservationRow(reservationId)).containsEntry("version", 1).containsEntry("start_ok", true);
+        assertThat(jdbc.queryForObject("SELECT base_version FROM reservation_change WHERE id = ?", Integer.class,
+                changeId)).isEqualTo(1);
+        assertThat(dedupeKeys(reservationId)).filteredOn(key -> key.startsWith(proposedKey))
+                .containsExactly(proposedKey + ":V0:CUSTOMER:SMS", proposedKey + ":V1:CUSTOMER:SMS");
+        // 바꾼 제안을 옛 화면 버전으로 다시 보내도(재시도) 같은 답 - 버전을 또 올리지 않음
+        propose(reservationId, proposal(changeId, time(monday, "16:00"), 0)).andExpect(status().isOk());
+        assertThat(reservationRow(reservationId)).containsEntry("version", 1);
+        assertThat(dedupeKeys(reservationId)).filteredOn(key -> key.startsWith(proposedKey)).hasSize(2);
+
+        // 고객이 14:00 제안을 보고 누른 수락 - 16:00에 적용되지 않고 버전 충돌, 예약·제안 그대로
+        accept(customer, reservationId, changeId, 0)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("RESERVATION_VERSION_CONFLICT"))
+                .andExpect(jsonPath("$.result.reservation.version").value(1))
+                .andExpect(jsonPath("$.result.reservation.startAt").value(time(monday, "10:00")));
+        assertThat(jdbc.queryForObject("SELECT status FROM reservation_change WHERE id = ?", String.class, changeId))
+                .isEqualTo("PROPOSED");
+        // 바뀐 제안을 다시 보고 수락
+        accept(customer, reservationId, changeId, 1)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.reservation.startAt").value(time(monday, "16:00")))
+                .andExpect(jsonPath("$.result.reservation.version").value(2));
+
+        // 그 뒤 예약을 취소해도, 같은 수락을 다시 보내면 수락했을 때의 결과 그대로 (지금 상태는 예약 상세로)
+        cancelAs(customer.token(), "/api/v1/customer/reservations/" + reservationId + "/cancel",
+                "{\"version\":2,\"reason\":\"일정이 생겼어요\"}").andExpect(status().isOk());
+        accept(customer, reservationId, changeId, 1)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.change.status").value("APPLIED"))
+                .andExpect(jsonPath("$.result.reservation.status").value("CONFIRMED"))
+                .andExpect(jsonPath("$.result.reservation.startAt").value(time(monday, "16:00")))
+                .andExpect(jsonPath("$.result.reservation.endAt").value(time(monday, "17:00")))
+                .andExpect(jsonPath("$.result.reservation.address").value(ADDRESS))
+                .andExpect(jsonPath("$.result.reservation.version").value(2));
+        assertThat(jdbc.queryForObject("SELECT status FROM reservation WHERE id = ?", String.class, reservationId))
+                .isEqualTo("CANCELED");
+    }
+
+    @Test
+    @DisplayName("지금 예약과 같은 시간의 제안을 수락 - 예약은 그대로여도 version은 1 오름, 수락 전 화면의 취소는 버전 충돌")
+    void sameSlotAcceptBumpsVersion() throws Exception {
+        Customer customer = customer();
+        long reservationId = reservation(customer, monday, 10);
+        long changeId = proposedChange(customer, reservationId, time(monday, "10:00"));
+
+        accept(customer, reservationId, changeId, 0)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.change.status").value("APPLIED"))
+                .andExpect(jsonPath("$.result.reservation.startAt").value(time(monday, "10:00")))
+                .andExpect(jsonPath("$.result.reservation.version").value(1));
+        assertThat(reservationRow(reservationId)).containsEntry("version", 1).containsEntry("start_ok", true);
+        cancelAs(customer.token(), "/api/v1/customer/reservations/" + reservationId + "/cancel",
+                "{\"version\":0,\"reason\":\"일정이 생겼어요\"}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("RESERVATION_VERSION_CONFLICT"));
+        // 같은 수락을 다시 - 처음 결과
+        accept(customer, reservationId, changeId, 0)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.reservation.version").value(1));
     }
 
     @Test
