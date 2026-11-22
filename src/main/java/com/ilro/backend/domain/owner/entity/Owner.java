@@ -166,6 +166,11 @@ public class Owner extends BaseTimeEntity {
         this.intakePaused = paused;
     }
 
+    // 알림 유형별 푸시 수신 여부 (B-27, BE-14) - 4개 유형을 JSON으로 통째로 바꿈
+    public void changeNotifySettings(String notifySettings) {
+        this.notifySettings = notifySettings;
+    }
+
     public boolean hasStartAddress() {
         return address != null && lat != null && lng != null;
     }

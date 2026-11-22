@@ -39,7 +39,7 @@ public class InquiryRecoveryService {
     @Transactional(readOnly = true)
     public CustomerInquiriesResponse list(AuthPrincipal principal) {
         checkRecoveryScope(principal);
-        List<Inquiry> inquiries = inquiryRepository.findByCustomerPhone(principal.ownerId(),
+        List<Inquiry> inquiries = inquiryRepository.findVerifiedByCustomerPhone(principal.ownerId(),
                 principal.customerPhone(), PageRequest.of(0, MAX_INQUIRIES));
         inquiries.forEach(inquiry -> AccessLog.record(principal, "VIEW", "inquiry", inquiry.getId()));
         return CustomerInquiriesResponse.from(inquiries);
@@ -52,7 +52,7 @@ public class InquiryRecoveryService {
         checkRecoveryScope(principal);
         Inquiry inquiry = inquiryRepository.findByIdForUpdate(inquiryId)
                 .filter(found -> !found.isDeleted() && found.getOwner().getId().equals(principal.ownerId())
-                        && found.getCustomer() != null
+                        && found.getPhoneVerifiedAt() != null && found.getCustomer() != null
                         && found.getCustomer().getPhone().equals(principal.customerPhone()))
                 .orElseThrow(() -> new BusinessException(InquiryErrorCode.INQUIRY_NOT_FOUND));
         inquiryAccess.checkOpen(inquiry);

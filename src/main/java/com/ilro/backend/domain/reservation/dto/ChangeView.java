@@ -12,6 +12,7 @@ import java.time.OffsetDateTime;
 // 변경 요청·제안 한 건 (명세 5.3, C-17) - 고객 예약 상세의 진행 중 변경과 변경 이력이 같은 모양
 // previous: 요청(업체 사유면 제안) 당시 예약 시간·주소
 // proposed: 바뀔 시간·주소 - 시간은 사장님이 제안한 뒤에만, 주소는 바꿀 때만 (안 바꾸면 null)
+//   사장님 제안 전에는 고객이 요청한 주소, 제안 뒤에는 그 제안이 반영하는 주소 (요청 주소는 따로 보관, V5)
 // expiresAt: 서버가 정한 제안 기한 / resolvedAt·resolvedBy·closeReason: 끝난 변경만
 public record ChangeView(Long changeId, ReservationChangeStatus status, RequestedBy requestedBy, String requestNote,
                          Slot previous, Slot proposed, OffsetDateTime expiresAt, OffsetDateTime requestedAt,
@@ -28,7 +29,8 @@ public record ChangeView(Long changeId, ReservationChangeStatus status, Requeste
                 new Slot(KstTime.of(change.getPrevStartAt()), KstTime.of(change.getPrevEndAt()),
                         change.getPrevAddress()),
                 new Slot(KstTime.of(change.getProposedStartAt()), KstTime.of(change.getProposedEndAt()),
-                        change.getProposedAddress()),
+                        change.getProposedStartAt() == null ? change.getRequestedAddress()
+                                : change.getProposedAddress()),
                 KstTime.of(change.getExpiresAt()), KstTime.of(change.getCreatedAt()),
                 KstTime.of(change.getResolvedAt()), change.getResolvedBy(), change.getCloseReason());
     }
