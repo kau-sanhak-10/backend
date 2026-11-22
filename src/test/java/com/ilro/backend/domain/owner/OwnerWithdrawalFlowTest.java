@@ -1,5 +1,6 @@
 package com.ilro.backend.domain.owner;
 
+import com.ilro.backend.domain.inquiry.service.IntakeTerms;
 import com.ilro.backend.support.TestAccounts;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -11,12 +12,19 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.context.WebApplicationContext;
 
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.notNullValue;
@@ -36,6 +44,10 @@ class OwnerWithdrawalFlowTest {
 
     @Autowired
     private JdbcTemplate jdbc;
+    @Autowired
+    private IntakeTerms intakeTerms;
+    @Autowired
+    private TransactionTemplate transactionTemplate;
 
     private MockMvc mockMvc;
     private TestAccounts accounts;
@@ -158,6 +170,47 @@ class OwnerWithdrawalFlowTest {
                         }))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("OWNER_WITHDRAWN"));
+    }
+
+    @Test
+    @DisplayName("탈퇴와 새 접수가 겹침 - 접수는 탈퇴가 끝난 뒤에 처리돼, 탈퇴한 업체에 진행 중 상담이 생기지 않음")
+    void intakeDuringWithdrawal() throws Exception {
+        long verificationId = verification("OWNER_LOGIN", ownerId, "1 minute");
+        String linkToken = accounts.linkToken(ownerId);
+        String start = "{\"consents\":[{\"type\":\"PRIVACY_REQUIRED\",\"termsVersion\":\"" + intakeTerms.version()
+                + "\"}]}";
+
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            // 탈퇴가 아직 끝나지 않은(커밋 전) 사이에 고객의 새 접수가 들어옴
+            Future<MvcResult> intake = transactionTemplate.execute(tx -> {
+                try {
+                    withdraw(ownerToken, "{\"verificationId\":" + verificationId + "}")
+                            .andExpect(status().isOk());
+                    Future<MvcResult> starting = executor.submit(() -> mockMvc.perform(
+                            post("/api/v1/public/intake/" + linkToken + "/inquiries")
+                                    .contentType(MediaType.APPLICATION_JSON).content(start)).andReturn());
+                    try {
+                        starting.get(1, TimeUnit.SECONDS);
+                    } catch (TimeoutException waitingForLock) {
+                        // 업체 행 잠금을 기다리는 중 - 탈퇴가 끝나야 진행
+                    }
+                    return starting;
+                } catch (Exception e) {
+                    throw new IllegalStateException(e);
+                }
+            });
+
+            MvcResult result = intake.get(10, TimeUnit.SECONDS);
+            assertThat(result.getResponse().getStatus()).as(result.getResponse().getContentAsString())
+                    .isBetween(400, 499);
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM inquiry WHERE owner_id = ?", Integer.class,
+                    ownerId)).isZero();
+            assertThat(jdbc.queryForObject("SELECT status FROM owner WHERE id = ?", String.class, ownerId))
+                    .isEqualTo("WITHDRAWN");
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     // 그 업체 로그인 번호로 받은 문자 인증 - verifiedAgo가 null이면 아직 인증 전

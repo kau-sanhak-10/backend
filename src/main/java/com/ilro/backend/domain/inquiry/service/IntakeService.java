@@ -76,9 +76,12 @@ public class IntakeService {
     // 동의 기록 + 문의 생성 + 문의 토큰 발급을 한 번에
     @Transactional
     public StartResult startInquiry(String linkToken, String requestKey, StartInquiryRequest request) {
-        // ponytail: key-bearing starts serialize on the owner row for this short, local-only transaction.
+        // 업체 행을 잠그고 시작 (키가 없어도) - 탈퇴는 같은 잠금을 잡고 진행 중 상담을 센 뒤 탈퇴 처리하므로,
+        // 잠그지 않으면 탈퇴 전에 읽은 상태(ACTIVE)로 탈퇴가 끝난 뒤에 진행 중 상담을 만들 수 있음 (BE-16)
+        // 잠근 뒤에 읽은 상태로 확인하므로 탈퇴가 먼저 끝났으면 접수하지 않음. 같은 키의 다시 보내기도 이 잠금으로 차례로
+        // ponytail: starts serialize on the owner row for this short, local-only transaction.
         // If per-owner contention grows, move locking to individual request keys.
-        Owner owner = findServingOwner(linkToken, requestKey != null);
+        Owner owner = findServingOwner(linkToken, true);
         Set<ConsentType> consentTypes = checkConsents(request.consents());
         String startHash = requestKey == null ? null : startHash(linkToken, requestKey);
         if (startHash != null) {
