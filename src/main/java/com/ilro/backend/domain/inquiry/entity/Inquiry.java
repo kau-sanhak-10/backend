@@ -128,10 +128,14 @@ public class Inquiry extends BaseTimeEntity {
     @Column(length = 20)
     private VisitInfoSource visitInfoSource;
 
+    @Column(length = 64, updatable = false)
+    private String startRequestHash;
+
     @Builder
-    private Inquiry(Owner owner, Customer customer) {
+    private Inquiry(Owner owner, Customer customer, String startRequestHash) {
         this.owner = owner;
         this.customer = customer;
+        this.startRequestHash = startRequestHash;
     }
 
     public boolean isDeleted() {

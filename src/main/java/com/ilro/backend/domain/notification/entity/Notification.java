@@ -80,4 +80,12 @@ public class Notification extends BaseCreatedEntity {
         this.channel = channel;
         this.dedupeKey = dedupeKey;
     }
+
+    // 사장님이 알림을 읽음 (B-26) - 이미 읽었으면 처음 읽은 시각 그대로
+    // 발송 상태(sendStatus)와는 따로 - 푸시가 실패해도 읽음은 웹에서 처리
+    public void markRead(Instant now) {
+        if (readAt == null) {
+            readAt = now;
+        }
+    }
 }

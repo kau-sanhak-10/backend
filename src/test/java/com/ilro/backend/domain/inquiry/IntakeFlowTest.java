@@ -12,6 +12,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
@@ -23,6 +24,7 @@ import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -200,6 +202,54 @@ class IntakeFlowTest {
                 .andExpect(jsonPath("$.result.phoneVerified").value(false))
                 .andExpect(jsonPath("$.result.consents", contains("PRIVACY_REQUIRED", "PHOTO")))
                 .andExpect(jsonPath("$.result.reservation").value(nullValue()));
+    }
+
+    @Test
+    @DisplayName("상담 시작 재시도는 하나의 빈 문의만 복구하고, 다른 요청·변경된 동의·시작된 대화는 구분")
+    void startRetryReusesOnlySameEmptyInquiry() throws Exception {
+        String key = UUID.randomUUID().toString();
+        Callable<MvcResult> send = () ->
+                mockMvc.perform(post(intake("/inquiries")).header("Idempotency-Key", key)
+                        .contentType(MediaType.APPLICATION_JSON).content(ALL_CONSENTS))
+                        .andReturn();
+        try (var pool = Executors.newFixedThreadPool(2)) {
+            var replies = pool.invokeAll(List.of(send, send));
+            var first = replies.getFirst().get().getResponse();
+            var second = replies.getLast().get().getResponse();
+            assertThat(List.of(first.getStatus(), second.getStatus())).containsExactlyInAnyOrder(201, 200);
+            assertThat(first.getHeader(HttpHeaders.CACHE_CONTROL)).isEqualTo("no-store");
+            assertThat(second.getHeader(HttpHeaders.CACHE_CONTROL)).isEqualTo("no-store");
+            long inquiryId = ((Number) JsonPath.read(first.getContentAsString(), "$.result.inquiryId")).longValue();
+            assertThat(((Number) JsonPath.read(second.getContentAsString(), "$.result.inquiryId")).longValue()).isEqualTo(inquiryId);
+            String token = JsonPath.read(second.getContentAsString(), "$.result.inquiryToken");
+            getAs(token, new Session(inquiryId, token).path("")).andExpect(status().isOk());
+            assertThat(inquiryCount()).isEqualTo(1);
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM consent WHERE inquiry_id = ?", Integer.class,
+                    inquiryId)).isEqualTo(2);
+            mockMvc.perform(post(intake("/inquiries")).header("Idempotency-Key", key)
+                            .contentType(MediaType.APPLICATION_JSON).content(PRIVACY_ONLY))
+                    .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("IDEMPOTENCY_KEY_REUSED"));
+            jdbc.update("UPDATE inquiry SET ai_input_seq = 1 WHERE id = ?", inquiryId);
+            var protectedResponse = send.call().getResponse();
+            assertThat(protectedResponse.getStatus()).isEqualTo(409);
+            assertThat(JsonPath.<String>read(protectedResponse.getContentAsString(), "$.code"))
+                    .isEqualTo("INQUIRY_START_RETRY_UNAVAILABLE");
+            assertThat(inquiryCount()).isEqualTo(1);
+        }
+        String newKey = UUID.randomUUID().toString();
+        String newBody = mockMvc.perform(post(intake("/inquiries")).header("Idempotency-Key", newKey)
+                        .contentType(MediaType.APPLICATION_JSON).content(ALL_CONSENTS))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        var newInquiry = new Session(((Number) JsonPath.read(newBody, "$.result.inquiryId")).longValue(),
+                JsonPath.read(newBody, "$.result.inquiryToken"));
+        mockMvc.perform(post(newInquiry.path("/photos"))
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + newInquiry.token())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"contentType\":\"image/jpeg\",\"sizeBytes\":128}"))
+                .andExpect(status().isCreated());
+        mockMvc.perform(post(intake("/inquiries")).header("Idempotency-Key", newKey)
+                        .contentType(MediaType.APPLICATION_JSON).content(ALL_CONSENTS))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("INQUIRY_START_RETRY_UNAVAILABLE"));
+        assertThat(inquiryCount()).isEqualTo(2);
     }
 
     @Test

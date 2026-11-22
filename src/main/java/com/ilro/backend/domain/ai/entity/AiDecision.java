@@ -1,6 +1,7 @@
 package com.ilro.backend.domain.ai.entity;
 
 import com.ilro.backend.domain.inquiry.entity.Inquiry;
+import com.ilro.backend.domain.inquiry.entity.InquiryStatus;
 import com.ilro.backend.domain.inquiry.entity.Message;
 import com.ilro.backend.global.entity.BaseCreatedEntity;
 import jakarta.persistence.Column;
@@ -22,6 +23,7 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
+import java.util.Objects;
 
 // AI 호출·판단 기록 1건 - 모델 비교·오류 사례 검토용 (O10)
 @Getter
@@ -109,6 +111,13 @@ public class AiDecision extends BaseCreatedEntity {
     // AI 요청 ID - 같은 요청의 결과는 한 번만 적용
     @Column(length = 64)
     private String requestId;
+
+    // 사장님 확인 단계에는 그 단계로 넘긴 현재 판단만 안내한다. 과거 분석은 이력으로 보존한다.
+    public boolean hasCurrentNextAction(Inquiry current) {
+        return current.getStatus() != InquiryStatus.OWNER_CHECK
+                || (Objects.equals(inputVersion, current.getAiInputSeq())
+                && (action == AiAction.ESCALATE_TO_OWNER || action == AiAction.COMPLETE));
+    }
 
     @Builder
     private AiDecision(Inquiry inquiry, Message message, AiStage stage, String modelName, String promptVersion,

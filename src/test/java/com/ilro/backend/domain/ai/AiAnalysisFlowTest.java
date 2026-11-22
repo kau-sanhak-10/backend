@@ -672,6 +672,8 @@ class AiAnalysisFlowTest {
         long messageId = send(session, "온수가 나오지 않아요");
         ai.then(reply(answer("CHECK_SCHEDULE", "DONE").fact("symptom", "온수가 나오지 않아요", messageId)));
         analysisService.analyze(session.inquiryId());
+        getAs(session.token(), session.path("")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.nextAction").value("CHECK_SCHEDULE"));
 
         long photoId = uploadedPhoto(session);
         sendWithPhoto(session, "추가 사진을 보냅니다", photoId);
@@ -686,9 +688,36 @@ class AiAnalysisFlowTest {
                 .andExpect(jsonPath("$.result.aiSummary.nextActionReason")
                         .value("이번 AI 분석을 완료하지 못했어요. 고객이 보낸 대화와 사진을 확인해 주세요."))
                 .andExpect(jsonPath("$.result.photos[0].photoId").value(photoId));
+        getAs(session.token(), session.path("")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.status").value("OWNER_CHECK"))
+                .andExpect(jsonPath("$.result.nextAction").value(nullValue()));
         String conversation = getAs(owner, path + "/messages").andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         assertThat(conversation).contains("온수가 나오지 않아요", "추가 사진을 보냅니다");
+    }
+
+    @Test
+    @DisplayName("직접 상담으로 이관하면 기존 예약 안내만 숨기고 상담 원문과 판단 기록은 보존")
+    void directHandoffHidesPriorBookingAction() throws Exception {
+        Session session = startInquiry();
+        long messageId = send(session, "온수가 나오지 않아요");
+        ai.then(reply(answer("CHECK_SCHEDULE", "DONE").fact("symptom", "온수가 나오지 않아요", messageId)));
+        analysisService.analyze(session.inquiryId());
+        getAs(session.token(), session.path("")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.nextAction").value("CHECK_SCHEDULE"));
+        postAs(session.token(), session.path("/handoff-requests"), "").andExpect(status().isCreated());
+        getAs(session.token(), session.path("")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.status").value("OWNER_CHECK"))
+                .andExpect(jsonPath("$.result.nextAction").value(nullValue()));
+        String owner = accounts.ownerToken(ownerId);
+        String path = "/api/v1/owner/inquiries/" + session.inquiryId();
+        getAs(owner, path).andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.aiSummary.nextAction").value(nullValue()))
+                .andExpect(jsonPath("$.result.aiSummary.nextActionReason").value(nullValue()));
+        assertThat(getAs(owner, path + "/messages").andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString()).contains("온수가 나오지 않아요");
+        assertThat(decisionStatuses(session)).containsExactly("SUCCESS");
+        assertThat(notifications(session)).isEqualTo(1);
     }
 
     @Test
