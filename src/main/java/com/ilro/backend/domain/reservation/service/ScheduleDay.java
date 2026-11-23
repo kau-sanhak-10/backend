@@ -6,6 +6,7 @@ import com.ilro.backend.infra.map.GeoPoint;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -45,11 +46,39 @@ public record ScheduleDay(LocalDate date, LocalTime open, LocalTime close, Local
         return date.atTime(time).atZone(KstTime.ZONE).toInstant();
     }
 
+    // 영업이 끝나는 시각 - 하루 전체로 본 날(withAllDayHours)은 다음 날 00:00
+    // (LocalTime.MAX는 23:59:59.999999999라 그대로 쓰면 자정에 끝나는 23:00~00:00 방문이 영업시간 밖이 됨)
+    public Instant closeAt() {
+        return LocalTime.MAX.equals(close) ? date.plusDays(1).atStartOfDay(KstTime.ZONE).toInstant() : at(close);
+    }
+
     // 하루 방문 한도에 세는 예약 - 그날(한국 날짜) 시작하는 것
     public long visitsStartingToday() {
         return visits.stream()
                 .filter(visit -> visit.startAt().atZone(KstTime.ZONE).toLocalDate().equals(date))
                 .count();
+    }
+
+    // 영업시간을 하루 전체(00:00~24:00)로 본 하루 - 사장님이 영업시간 밖 경고를 확인한 수동 예약 (BE-12, 명세 7.2 결정 7)
+    // 점심·차단·하루 한도·겹침·이동은 그대로 봄
+    public ScheduleDay withAllDayHours() {
+        return new ScheduleDay(date, LocalTime.MIN, LocalTime.MAX, lunchStart, lunchEnd, maxDailyVisits, bufferMinutes,
+                origin, blocks, visits);
+    }
+
+    // 자정을 사이에 두고 가까이 붙은 전날·다음 날 방문을 앞뒤 방문으로 넣은 하루 (VisitScheduleService)
+    // 그날 시작하는 방문이 아니라 하루 한도에는 세지 않음 (visitsStartingToday)
+    public ScheduleDay withNeighbors(List<Visit> neighbors) {
+        if (neighbors.isEmpty()) {
+            return this;
+        }
+        List<Visit> all = new ArrayList<>(visits);
+        neighbors.stream()
+                .filter(neighbor -> visits.stream()
+                        .noneMatch(visit -> Objects.equals(visit.reservationId(), neighbor.reservationId())))
+                .forEach(all::add);
+        return new ScheduleDay(date, open, close, lunchStart, lunchEnd, maxDailyVisits, bufferMinutes, origin, blocks,
+                all);
     }
 
     // 바꾸려는 예약을 뺀 하루 - 예약 변경(B-19)에서 자기 예약은 겹침·하루 한도·앞뒤 방문에 넣지 않음 (명세 5.3)

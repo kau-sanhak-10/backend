@@ -68,6 +68,8 @@ app:
   booking:
     # 방문 가능 시간 후보 간격 - 영업 시작부터 이 간격마다 (C-12)
     slot-step: 30m
+    # 기한이 지난 시간 변경 제안을 EXPIRED로 바꾸는 간격 (명세 5.3, BE-16) - 수락할 때도 기한을 다시 봄
+    proposal-expiry-interval: PT1M
   map:
     # 같은 두 지점(방향 구분)의 자동차 이동시간은 이 시간 동안 지도에 다시 묻지 않음 (BE-10)
     travel-cache-ttl: 6h

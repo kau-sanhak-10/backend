@@ -27,7 +27,7 @@ public final class SlotChecker {
         if (start.isBefore(now)) {
             return SlotCheck.unavailable(SlotUnavailableReason.PAST);
         }
-        if (day.isClosed() || start.isBefore(day.at(day.open())) || end.isAfter(day.at(day.close()))) {
+        if (day.isClosed() || start.isBefore(day.at(day.open())) || end.isAfter(day.closeAt())) {
             return SlotCheck.unavailable(SlotUnavailableReason.OUTSIDE_BUSINESS_HOURS);
         }
         if (day.hasLunch() && new ScheduleDay.TimeRange(day.at(day.lunchStart()), day.at(day.lunchEnd()))

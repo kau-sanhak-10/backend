@@ -15,10 +15,15 @@ import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
 public interface InquiryRepository extends JpaRepository<Inquiry, Long> {
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "3000"))
+    Optional<Inquiry> findLockedByOwnerIdAndStartRequestHash(Long ownerId, String startRequestHash);
 
     // 문의 쓰기(메시지·방문정보·접수정보)는 문의 행을 잠그고 차례로 처리 - 같은 clientMsgId 동시 재전송도 하나만 저장
     // 3초 안에 못 잡으면 503 SERVICE_UNAVAILABLE (명세 3.10)
@@ -62,12 +67,14 @@ public interface InquiryRepository extends JpaRepository<Inquiry, Long> {
     Page<Inquiry> findOwnerInquiries(@Param("ownerId") Long ownerId, @Param("status") InquiryStatus status,
                                      @Param("handlerMode") HandlerMode handlerMode, Pageable pageable);
 
-    // 상담 복구 (C-03, BE-18) - 그 업체에서 방문정보 번호가 이 번호인 문의, 삭제된 문의 빼고 최근 것부터
     @Query("select i from Inquiry i join i.customer c where i.owner.id = :ownerId and c.phone = :phone "
-            + "and i.deletedAt is null order by i.id desc")
-    List<Inquiry> findByCustomerPhone(@Param("ownerId") Long ownerId, @Param("phone") String phone,
-                                      Pageable pageable);
+            + "and i.phoneVerifiedAt is not null and i.deletedAt is null order by i.id desc")
+    List<Inquiry> findVerifiedByCustomerPhone(@Param("ownerId") Long ownerId, @Param("phone") String phone,
+                                              Pageable pageable);
 
     // 사장님 홈 확인 필요 건수 (B-10)
     long countByOwnerIdAndStatusAndDeletedAtIsNull(Long ownerId, InquiryStatus status);
+
+    // 사장님 탈퇴 확인 (B-04, BE-16) - 처리하지 않은 문의 수
+    long countByOwnerIdAndStatusInAndDeletedAtIsNull(Long ownerId, Collection<InquiryStatus> statuses);
 }

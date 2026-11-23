@@ -14,6 +14,7 @@ import com.ilro.backend.domain.inquiry.entity.ConsentType;
 import com.ilro.backend.domain.inquiry.entity.HandlerMode;
 import com.ilro.backend.domain.inquiry.entity.HandoffRequest;
 import com.ilro.backend.domain.inquiry.entity.Inquiry;
+import com.ilro.backend.domain.inquiry.entity.InquiryStatus;
 import com.ilro.backend.domain.inquiry.repository.ConsentRepository;
 import com.ilro.backend.domain.inquiry.repository.HandoffRequestRepository;
 import com.ilro.backend.domain.reservation.entity.Reservation;
@@ -79,6 +80,8 @@ public class CustomerInquiryService {
         AiAction nextAction = inquiry.getHandlerMode() != HandlerMode.AI ? null : aiDecisionRepository
                 .findFirstByInquiryIdAndStageAndStatusOrderByIdDesc(inquiry.getId(), AiStage.DECIDE,
                         AiDecisionStatus.SUCCESS)
+                // 직접 상담이나 새 입력의 실패로 넘어가면 이전 예약·질문 안내를 숨긴다.
+                .filter(decision -> decision.hasCurrentNextAction(inquiry))
                 .map(AiDecision::getAction)
                 .orElse(null);
         List<ConsentType> consents = consentRepository.findByInquiryIdOrderByIdAsc(inquiry.getId()).stream()
