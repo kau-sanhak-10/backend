@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -21,6 +22,9 @@ public interface ReservationRepository extends JpaRepository<Reservation, Long> 
 
     // 사장님 예약 - 다른 업체 예약은 없는 것처럼 (BE-12)
     Optional<Reservation> findByIdAndOwnerId(Long id, Long ownerId);
+
+    // 사장님 탈퇴 확인 (B-04, BE-16) - 끝나지 않은 예약 수 (지난 방문도 완료 처리 전이면 셈)
+    long countByOwnerIdAndStatusIn(Long ownerId, Collection<ReservationStatus> statuses);
 
     // 차단 시간과 겹치는 확정 예약 (B-22)
     @Query("select r from Reservation r where r.owner.id = :ownerId and r.status = :status "

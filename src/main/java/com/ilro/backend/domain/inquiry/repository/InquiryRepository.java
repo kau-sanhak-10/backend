@@ -15,6 +15,7 @@ import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -73,4 +74,7 @@ public interface InquiryRepository extends JpaRepository<Inquiry, Long> {
 
     // 사장님 홈 확인 필요 건수 (B-10)
     long countByOwnerIdAndStatusAndDeletedAtIsNull(Long ownerId, InquiryStatus status);
+
+    // 사장님 탈퇴 확인 (B-04, BE-16) - 처리하지 않은 문의 수
+    long countByOwnerIdAndStatusInAndDeletedAtIsNull(Long ownerId, Collection<InquiryStatus> statuses);
 }
