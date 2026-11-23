@@ -966,7 +966,7 @@ class OwnerInquiryFlowTest {
 
     private int notifications(Session session) {
         return jdbc.queryForObject("SELECT count(*) FROM notification WHERE ref_type = 'INQUIRY' AND ref_id = ? "
-                + "AND event_type = 'NEEDS_CHECK'", Integer.class, session.inquiryId());
+                + "AND event_type = 'NEEDS_CHECK' AND channel = 'IN_APP'", Integer.class, session.inquiryId());
     }
 
     private static String customerMessage(String clientMsgId, String content) {
