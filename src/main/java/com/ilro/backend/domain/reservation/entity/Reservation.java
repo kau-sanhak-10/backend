@@ -83,6 +83,10 @@ public class Reservation extends BaseTimeEntity {
     @Column(nullable = false)
     private boolean isManual;
 
+    // 영업시간 밖 경고를 확인하고 등록한 수동 예약 - 등록할 때의 결과 (나중에 영업시간이 바뀌어도 그대로)
+    @Column(nullable = false)
+    private boolean outsideBusinessHours;
+
     // 예약 확정 요청 키 - 반복 요청으로 중복 예약 방지 (C13)
     @Column(length = 64)
     private String idempotencyKey;
@@ -96,12 +100,34 @@ public class Reservation extends BaseTimeEntity {
     @Column(nullable = false)
     private Integer version;
 
+    // 확정 예약만 시간·주소를 바꾸거나 취소할 수 있음 (취소·완료 예약은 그대로)
+    public boolean isConfirmed() {
+        return status == ReservationStatus.CONFIRMED;
+    }
+
+    // 변경 확정 (명세 5.3) - 시간·주소와 그때의 이동시간, version은 저장할 때 1 오름
+    public void reschedule(Instant startAt, Instant endAt, String address, BigDecimal lat, BigDecimal lng,
+                           Integer travelTimeMinutes) {
+        this.startAt = startAt;
+        this.endAt = endAt;
+        this.address = address;
+        this.lat = lat;
+        this.lng = lng;
+        this.travelTimeMinutes = travelTimeMinutes;
+    }
+
+    // 즉시 취소 (명세 5.4) - version은 저장할 때 1 오름
+    public void cancel() {
+        this.status = ReservationStatus.CANCELED;
+    }
+
     // status를 주지 않으면 REQUESTED - 고객 예약 확정(BE-11)·수동 예약(BE-12)은 처음부터 CONFIRMED
     @Builder
     private Reservation(Inquiry inquiry, Owner owner, Customer customer, Instant startAt, Instant endAt,
                         String address, BigDecimal lat, BigDecimal lng, OwnerWorkType workType,
                         Integer travelTimeMinutes, Integer workMinutes, Integer bufferMinutes, boolean isManual,
-                        String idempotencyKey, String idempotencyHash, ReservationStatus status) {
+                        boolean outsideBusinessHours, String idempotencyKey, String idempotencyHash,
+                        ReservationStatus status) {
         if (status != null) {
             this.status = status;
         }
@@ -118,6 +144,7 @@ public class Reservation extends BaseTimeEntity {
         this.workMinutes = workMinutes;
         this.bufferMinutes = bufferMinutes;
         this.isManual = isManual;
+        this.outsideBusinessHours = outsideBusinessHours;
         this.idempotencyKey = idempotencyKey;
         this.idempotencyHash = idempotencyHash;
     }

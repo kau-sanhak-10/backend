@@ -42,14 +42,14 @@ class MigrationUpgradeTest {
     void migratesEmptyDatabase() {
         flyway(null).migrate();
 
-        assertThat(currentVersion()).isEqualTo("4");
+        assertThat(currentVersion()).isEqualTo("5");
         assertThat(jdbc.queryForObject(
                 "SELECT count(*) FROM information_schema.tables WHERE table_schema = ? AND table_name <> "
                         + "'flyway_schema_history'", Integer.class, SCHEMA)).isEqualTo(23);
     }
 
     @Test
-    @DisplayName("V1 데이터가 있는 DB도 V4까지 올라가며 이전 데이터의 변환 규칙을 유지한다")
+    @DisplayName("V1 데이터가 있는 DB도 V5까지 올라가며 이전 데이터의 변환 규칙을 유지한다")
     void migratesV1Data() {
         flyway("1").migrate();
         Instant now = Instant.now();
@@ -78,13 +78,32 @@ class MigrationUpgradeTest {
         long longProposal = insertChange(farFuture, "CHANGE", "PROPOSED", "'2099-01-08T10:00:00+09:00'::timestamptz",
                 "NULL");
         long lateProposal = insertChange(soon, "CHANGE", "PROPOSED", "CURRENT_TIMESTAMP + interval '1 hour'", "NULL");
+        // 고객이 주소 변경을 요청한 행 - 제안 전(취소 요청)과 제안 뒤
+        jdbc.update("UPDATE " + S + "reservation_change SET proposed_address = '경기 고양시 ○○로 1', "
+                + "proposed_lat = 37.65, proposed_lng = 126.85 WHERE id IN (?, ?)", pendingCancel, longProposal);
 
         jdbc.update("INSERT INTO " + S + "ai_decision (inquiry_id, stage, action, decided_by, status) "
                 + "VALUES (?, 'DECIDE', 'ASK_MORE_INFO', 'EXTERNAL_API', 'SUCCESS')", liveInquiry);
 
         flyway(null).migrate();
 
-        assertThat(currentVersion()).isEqualTo("4");
+        assertThat(currentVersion()).isEqualTo("5");
+        // V5: 고객이 요청한 주소는 요청 주소 칸으로 옮기고, 제안이 없는 행은 제안 주소를 비움. 제안한 행은 제안 주소 유지
+        assertThat(jdbc.queryForMap("SELECT requested_address, requested_lat, proposed_address, proposed_lat FROM "
+                + S + "reservation_change WHERE id = ?", pendingCancel))
+                .containsEntry("requested_address", "경기 고양시 ○○로 1")
+                .containsEntry("proposed_address", null)
+                .containsEntry("proposed_lat", null)
+                .extractingByKey("requested_lat").isNotNull();
+        assertThat(jdbc.queryForMap("SELECT requested_address, proposed_address FROM " + S
+                + "reservation_change WHERE id = ?", longProposal))
+                .containsEntry("requested_address", "경기 고양시 ○○로 1")
+                .containsEntry("proposed_address", "경기 고양시 ○○로 1");
+        assertThat(jdbc.queryForObject("SELECT requested_address FROM " + S + "reservation_change WHERE id = ?",
+                String.class, lateProposal)).isNull();
+        // V5: 기존 예약은 영업시간 밖 등록이 아님
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM " + S + "reservation WHERE outside_business_hours",
+                Integer.class)).isZero();
         // V3: 기존 문의는 방문정보를 누가 정했는지 기록이 없음 (고객 값으로 봄)
         assertThat(jdbc.queryForObject("SELECT count(*) FROM " + S + "inquiry WHERE visit_info_source IS NOT NULL",
                 Integer.class)).isZero();
