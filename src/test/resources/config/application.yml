@@ -10,3 +10,11 @@ app:
   # 제안 만료 작업이 테스트 도중 저절로 돌지 않게 - 테스트는 ProposalExpiryJob을 직접 부름
   booking:
     proposal-expiry-interval: PT1H
+# 테스트 클래스마다 설정(@MockitoBean 등)이 다르면 스프링이 컨텍스트를 따로 띄우고 캐시에 남겨 둠
+# 컨텍스트마다 연결 10개(기본값)를 잡고 있으면 Postgres 최대 연결(100)을 넘어 'too many clients'
+# 동시성 테스트도 스레드 2개 + 테스트 본문이라 5개면 충분
+spring:
+  datasource:
+    hikari:
+      maximum-pool-size: 5
+      minimum-idle: 1
