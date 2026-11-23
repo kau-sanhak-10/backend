@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import java.util.List;
 
 public interface PushSubscriptionRepository extends JpaRepository<PushSubscription, Long> {
 
@@ -23,4 +24,12 @@ public interface PushSubscriptionRepository extends JpaRepository<PushSubscripti
     @Modifying
     @Query("delete from PushSubscription s where s.endpoint = :endpoint and s.owner.id = :ownerId")
     int deleteByEndpointAndOwnerId(@Param("endpoint") String endpoint, @Param("ownerId") Long ownerId);
+
+    // 이 사장님 브라우저 구독 전부 (발송기, BE-14) - 폰·PC 등 기기마다 한 줄
+    List<PushSubscription> findByOwnerId(Long ownerId);
+
+    // 푸시 서버가 없어진 구독이라고 답함(404·410) → 지움 (명세 5.6) - 업체와 상관없이 그 주소만
+    @Modifying
+    @Query("delete from PushSubscription s where s.endpoint = :endpoint")
+    int deleteByEndpoint(@Param("endpoint") String endpoint);
 }

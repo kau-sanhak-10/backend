@@ -307,6 +307,17 @@ class AiAnalysisFlowTest {
                 .containsEntry("ref_type", "INQUIRY")
                 .containsEntry("channel", "IN_APP")
                 .containsEntry("send_status", "PENDING");
+        // 같은 사건의 사장님 푸시 - 발송기가 보냄 (BE-14)
+        assertThat(jdbc.queryForMap("SELECT owner_id, recipient, event_type, ref_type, ref_id, channel, send_status "
+                + "FROM notification WHERE dedupe_key = ?", "NEEDS_CHECK:INQUIRY:" + session.inquiryId() + ":"
+                + inputVersion + ":WEB_PUSH"))
+                .containsEntry("owner_id", ownerId)
+                .containsEntry("recipient", "OWNER")
+                .containsEntry("event_type", "NEEDS_CHECK")
+                .containsEntry("ref_type", "INQUIRY")
+                .containsEntry("ref_id", session.inquiryId())
+                .containsEntry("channel", "WEB_PUSH")
+                .containsEntry("send_status", "PENDING");
     }
 
     @Test
@@ -1148,7 +1159,7 @@ class AiAnalysisFlowTest {
 
     private int notifications(Session session) {
         return jdbc.queryForObject("SELECT count(*) FROM notification WHERE ref_type = 'INQUIRY' AND ref_id = ? "
-                + "AND event_type = 'NEEDS_CHECK'", Integer.class, session.inquiryId());
+                + "AND event_type = 'NEEDS_CHECK' AND channel = 'IN_APP'", Integer.class, session.inquiryId());
     }
 
     private static void sleep(Duration duration) {

@@ -18,7 +18,9 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 
 // 알림 (받는 쪽·채널별 1행)
 @Getter
@@ -66,6 +68,9 @@ public class Notification extends BaseCreatedEntity {
     @Column(nullable = false)
     private int attemptCount = 0;
 
+    // 실패한 뒤 다시 보내도 되는 시각 (실패할 때 정함) - 첫 시도 전·보낸 뒤·한도를 넘긴 뒤에는 null
+    private Instant nextAttemptAt;
+
     // 외부 발송 실패와 무관하게 미확인 업무 유지
     private Instant readAt;
 
@@ -87,5 +92,36 @@ public class Notification extends BaseCreatedEntity {
         if (readAt == null) {
             readAt = now;
         }
+    }
+
+    // 재시도 한도 (명세 5.10) - 이만큼 실패하면 FAILED로 남고 운영 실패 작업(O-07·O-08)에서 확인
+    public static final int MAX_ATTEMPTS = 3;
+    // 재시도 간격 - 실패한 시각부터 1번째 실패 뒤 1분, 2번째 실패 뒤 5분
+    public static final List<Duration> RETRY_DELAYS = List.of(Duration.ofMinutes(1), Duration.ofMinutes(5));
+
+    // 발송 대상인지 - 보낸 것·건너뛴 것·한도를 넘긴 것은 다시 보내지 않음
+    public boolean isDeliverable() {
+        return (sendStatus == NotificationSendStatus.PENDING || sendStatus == NotificationSendStatus.FAILED)
+                && attemptCount < MAX_ATTEMPTS;
+    }
+
+    // 보냄 - 시도 횟수에 포함
+    public void markSent() {
+        attemptCount++;
+        sendStatus = NotificationSendStatus.SENT;
+        nextAttemptAt = null;
+    }
+
+    // 못 보냄 - 시도 횟수가 한도 전이면 실패한 시각부터 간격(RETRY_DELAYS)이 지난 뒤 다시 (명세 5.10)
+    // 생성 시각이 아니라 실패한 시각 기준 - 큐에서 오래 기다린 알림도 재시도 사이에 간격을 둠
+    public void markFailed(Instant now) {
+        attemptCount++;
+        sendStatus = NotificationSendStatus.FAILED;
+        nextAttemptAt = attemptCount < MAX_ATTEMPTS ? now.plus(RETRY_DELAYS.get(attemptCount - 1)) : null;
+    }
+
+    // 보내기 직전에 보니 보낼 필요가 없어짐 - 취소된 예약의 확정 알림, 끝난 제안, 꺼 둔 유형 등 (시도 아님)
+    public void markSkipped() {
+        sendStatus = NotificationSendStatus.SKIPPED;
     }
 }

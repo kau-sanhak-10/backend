@@ -12,6 +12,11 @@ import jakarta.persistence.LockModeType;
 import jakarta.persistence.QueryHint;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.QueryHints;
+import com.ilro.backend.domain.notification.entity.NotificationSendStatus;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import java.time.Instant;
+import java.util.Collection;
 
 import java.util.List;
 import java.util.Optional;
@@ -22,8 +27,14 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
     boolean existsByDedupeKey(String dedupeKey);
 
     // 한 사건의 알림들 - 같은 예약 확정 요청을 다시 받았을 때 처음 응답의 notifications를 다시 만듦 (명세 1.6·5.10)
-    List<Notification> findByRefTypeAndRefIdAndEventTypeOrderByIdAsc(NotificationRefType refType, Long refId,
-                                                                     NotificationEventType eventType);
+    // 앱 안 알림(IN_APP)은 뺌 - 처음 응답에도 보낼 알림(문자·푸시)만 들어감 (ReservationNotifier)
+    @Query("select n from Notification n where n.refType = :refType and n.refId = :refId "
+            + "and n.eventType = :eventType "
+            + "and n.channel <> com.ilro.backend.domain.notification.entity.NotificationChannel.IN_APP "
+            + "order by n.id asc")
+    List<Notification> findByRefTypeAndRefIdAndEventTypeOrderByIdAsc(@Param("refType") NotificationRefType refType,
+                                                                     @Param("refId") Long refId,
+                                                                     @Param("eventType") NotificationEventType eventType);
 
     // 사장님 홈의 미확인 알림 수 (B-10) - 앱 안 알림만 (푸시는 같은 사건을 다른 채널로 보낸 것)
     long countByOwnerIdAndRecipientAndChannelAndReadAtIsNull(Long ownerId, NotificationRecipient recipient,
@@ -46,4 +57,16 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
     Optional<Notification> findByIdAndOwnerIdAndRecipientAndChannel(Long id, Long ownerId,
                                                                     NotificationRecipient recipient,
                                                                     NotificationChannel channel);
+
+    // 발송 대상 (명세 5.10, BE-14 발송기) - 아직 안 보냈거나 실패하고 한도 전인 것, 오래된 것부터 ID만
+    // 첫 시도는 바로, 재시도는 실패할 때 정한 다음 시도 시각(nextAttemptAt)이 지난 것만 (Notification.markFailed)
+    @Query("select n.id from Notification n where n.channel in :channels and n.sendStatus in :statuses "
+            + "and n.attemptCount < :maxAttempts "
+            + "and (n.attemptCount = 0 or n.nextAttemptAt <= :now) "
+            + "order by n.id")
+    List<Long> findDeliverableIds(@Param("channels") Collection<NotificationChannel> channels,
+                                  @Param("statuses") Collection<NotificationSendStatus> statuses,
+                                  @Param("maxAttempts") int maxAttempts,
+                                  @Param("now") Instant now,
+                                  Pageable pageable);
 }
