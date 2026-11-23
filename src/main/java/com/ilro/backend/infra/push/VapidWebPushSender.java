@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -77,12 +78,19 @@ public class VapidWebPushSender implements WebPushSender {
     public WebPushResult send(String endpoint) {
         URI uri = URI.create(endpoint);
         try {
-            restClient.post()
+            HttpStatusCode status = restClient.post()
                     .uri(uri)
                     .header("Authorization", "vapid t=" + token(audienceOf(uri)) + ", k=" + publicKey)
                     .header("TTL", MESSAGE_TTL_SECONDS)
                     .retrieve()
-                    .toBodilessEntity();
+                    .toBodilessEntity()
+                    .getStatusCode();
+            // 2xx만 보냄 - 3xx는 오류로 던지지 않고 여기로 옴. 리다이렉트는 따라가지 않음
+            // (구독 주소는 허용 목록으로 검사한 곳으로만 보내야 해서) → 실패로 두고 다시 보냄
+            if (!status.is2xxSuccessful()) {
+                log.warn("Push not accepted: host={}, status={}", uri.getHost(), status.value());
+                return WebPushResult.FAILED;
+            }
             return WebPushResult.SENT;
         } catch (RestClientResponseException e) {
             int status = e.getStatusCode().value();

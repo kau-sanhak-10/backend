@@ -75,17 +75,21 @@ class VapidWebPushSenderTest {
     }
 
     @Test
-    @DisplayName("발송 결과 - 404·410은 GONE(구독 지움), 그 밖의 실패는 FAILED(다시 보냄)")
+    @DisplayName("발송 결과 - 404·410은 GONE(구독 지움), 3xx(리다이렉트 안 따라감)·그 밖의 실패는 FAILED(다시 보냄)")
     void mapsStatus() {
         server.expect(requestTo(ENDPOINT)).andRespond(withStatus(HttpStatus.GONE));
         server.expect(requestTo(ENDPOINT)).andRespond(withStatus(HttpStatus.NOT_FOUND));
         server.expect(requestTo(ENDPOINT)).andRespond(withStatus(HttpStatus.FORBIDDEN));
         server.expect(requestTo(ENDPOINT)).andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE));
+        server.expect(requestTo(ENDPOINT)).andRespond(withStatus(HttpStatus.TEMPORARY_REDIRECT)
+                .header("Location", "https://example.com/elsewhere"));
 
         assertThat(sender.send(ENDPOINT)).isEqualTo(WebPushResult.GONE);
         assertThat(sender.send(ENDPOINT)).isEqualTo(WebPushResult.GONE);
         assertThat(sender.send(ENDPOINT)).isEqualTo(WebPushResult.FAILED);
         assertThat(sender.send(ENDPOINT)).isEqualTo(WebPushResult.FAILED);
+        assertThat(sender.send(ENDPOINT)).isEqualTo(WebPushResult.FAILED);
+        server.verify();
     }
 
     @Test
