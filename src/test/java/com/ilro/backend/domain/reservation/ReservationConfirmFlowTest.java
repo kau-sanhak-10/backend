@@ -152,7 +152,8 @@ class ReservationConfirmFlowTest {
         assertThat(jdbc.queryForList("SELECT dedupe_key FROM notification WHERE ref_type = 'RESERVATION' "
                 + "AND ref_id = ? ORDER BY id", String.class, reservationId)).containsExactly(
                 "RESERVATION:" + reservationId + ":CONFIRMED:CUSTOMER:SMS",
-                "RESERVATION:" + reservationId + ":CONFIRMED:OWNER:WEB_PUSH");
+                "RESERVATION:" + reservationId + ":CONFIRMED:OWNER:WEB_PUSH",
+                "RESERVATION:" + reservationId + ":CONFIRMED:OWNER:IN_APP");
         assertThat(inquiryStatus(session)).isEqualTo("BOOKED");
         assertThat(inquiryVersion(session)).isEqualTo(versionBefore + 1);
     }
@@ -188,7 +189,7 @@ class ReservationConfirmFlowTest {
                 .andExpect(jsonPath("$.code").value("IDEMPOTENCY_KEY_REUSED"));
         assertThat(reservations()).isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM notification WHERE ref_type = 'RESERVATION' "
-                + "AND ref_id = ?", Integer.class, reservationId)).isEqualTo(2);
+                + "AND ref_id = ?", Integer.class, reservationId)).isEqualTo(3);
     }
 
     @Test

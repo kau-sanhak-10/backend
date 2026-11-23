@@ -120,8 +120,9 @@ class ReservationChangeFlowTest {
                 .containsEntry("prev_address", ADDRESS)
                 .containsEntry("base_version", 0)
                 .containsEntry("prev_kept", true);
-        assertThat(dedupeKeys(reservationId)).containsExactly(
-                "RESERVATION:" + reservationId + ":CHANGE:" + changeId + ":OWNER:WEB_PUSH");
+        assertThat(dedupeKeys(reservationId)).containsExactlyInAnyOrder(
+                "RESERVATION:" + reservationId + ":CHANGE:" + changeId + ":OWNER:WEB_PUSH",
+                "RESERVATION:" + reservationId + ":CHANGE:" + changeId + ":OWNER:IN_APP");
 
         // 진행 중 요청이 있으면 새 요청 못 함 - 그 요청을 같이 돌려줌
         request(customer, reservationId, "{\"requestNote\":\"다시\",\"baseVersion\":0}")
@@ -201,8 +202,8 @@ class ReservationChangeFlowTest {
                 .andExpect(jsonPath("$.result.change.status").value("APPLIED"))
                 .andExpect(jsonPath("$.result.reservation.version").value(1));
         assertThat(reservationRow(reservationId)).containsEntry("version", 1);
-        // 요청 푸시 1 + 제안 문자 1 + 확정 문자·푸시 2
-        assertThat(dedupeKeys(reservationId)).hasSize(4);
+        // 요청 푸시·앱 안 알림 2 + 제안 문자 1 + 확정 문자·푸시·앱 안 알림 3
+        assertThat(dedupeKeys(reservationId)).hasSize(6);
 
         reject(customer, reservationId, changeId)
                 .andExpect(status().isConflict())

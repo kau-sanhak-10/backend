@@ -27,8 +27,14 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
     boolean existsByDedupeKey(String dedupeKey);
 
     // 한 사건의 알림들 - 같은 예약 확정 요청을 다시 받았을 때 처음 응답의 notifications를 다시 만듦 (명세 1.6·5.10)
-    List<Notification> findByRefTypeAndRefIdAndEventTypeOrderByIdAsc(NotificationRefType refType, Long refId,
-                                                                     NotificationEventType eventType);
+    // 앱 안 알림(IN_APP)은 뺌 - 처음 응답에도 보낼 알림(문자·푸시)만 들어감 (ReservationNotifier)
+    @Query("select n from Notification n where n.refType = :refType and n.refId = :refId "
+            + "and n.eventType = :eventType "
+            + "and n.channel <> com.ilro.backend.domain.notification.entity.NotificationChannel.IN_APP "
+            + "order by n.id asc")
+    List<Notification> findByRefTypeAndRefIdAndEventTypeOrderByIdAsc(@Param("refType") NotificationRefType refType,
+                                                                     @Param("refId") Long refId,
+                                                                     @Param("eventType") NotificationEventType eventType);
 
     // 사장님 홈의 미확인 알림 수 (B-10) - 앱 안 알림만 (푸시는 같은 사건을 다른 채널로 보낸 것)
     long countByOwnerIdAndRecipientAndChannelAndReadAtIsNull(Long ownerId, NotificationRecipient recipient,
