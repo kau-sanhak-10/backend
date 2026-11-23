@@ -42,14 +42,14 @@ class MigrationUpgradeTest {
     void migratesEmptyDatabase() {
         flyway(null).migrate();
 
-        assertThat(currentVersion()).isEqualTo("5");
+        assertThat(currentVersion()).isEqualTo("6");
         assertThat(jdbc.queryForObject(
                 "SELECT count(*) FROM information_schema.tables WHERE table_schema = ? AND table_name <> "
                         + "'flyway_schema_history'", Integer.class, SCHEMA)).isEqualTo(23);
     }
 
     @Test
-    @DisplayName("V1 데이터가 있는 DB도 V5까지 올라가며 이전 데이터의 변환 규칙을 유지한다")
+    @DisplayName("V1 데이터가 있는 DB도 V6까지 올라가며 이전 데이터의 변환 규칙을 유지한다")
     void migratesV1Data() {
         flyway("1").migrate();
         Instant now = Instant.now();
@@ -85,9 +85,24 @@ class MigrationUpgradeTest {
         jdbc.update("INSERT INTO " + S + "ai_decision (inquiry_id, stage, action, decided_by, status) "
                 + "VALUES (?, 'DECIDE', 'ASK_MORE_INFO', 'EXTERNAL_API', 'SUCCESS')", liveInquiry);
 
+        // 재시도를 기다리던 실패 알림과 이미 보낸 알림
+        long failedNotification = insert("INSERT INTO " + S + "notification (owner_id, recipient, event_type, "
+                + "ref_type, ref_id, channel, dedupe_key, send_status, attempt_count) VALUES (?, 'CUSTOMER', "
+                + "'NEW_RESERVATION', 'RESERVATION', ?, 'SMS', 'v1-failed', 'FAILED', 1) RETURNING id",
+                autoOwner, keyed);
+        long sentNotification = insert("INSERT INTO " + S + "notification (owner_id, recipient, event_type, "
+                + "ref_type, ref_id, channel, dedupe_key, send_status, attempt_count) VALUES (?, 'CUSTOMER', "
+                + "'NEW_RESERVATION', 'RESERVATION', ?, 'SMS', 'v1-sent', 'SENT', 1) RETURNING id",
+                autoOwner, keyed);
+
         flyway(null).migrate();
 
-        assertThat(currentVersion()).isEqualTo("5");
+        assertThat(currentVersion()).isEqualTo("6");
+        // V6: 재시도를 기다리던 실패 알림은 다음 시도 시각이 생겨 바로 다시 골라짐, 보낸 알림은 비어 있음
+        assertThat(jdbc.queryForObject("SELECT next_attempt_at IS NOT NULL AND next_attempt_at <= CURRENT_TIMESTAMP "
+                + "FROM " + S + "notification WHERE id = ?", Boolean.class, failedNotification)).isTrue();
+        assertThat(jdbc.queryForObject("SELECT next_attempt_at IS NULL FROM " + S + "notification WHERE id = ?",
+                Boolean.class, sentNotification)).isTrue();
         // V5: 고객이 요청한 주소는 요청 주소 칸으로 옮기고, 제안이 없는 행은 제안 주소를 비움. 제안한 행은 제안 주소 유지
         assertThat(jdbc.queryForMap("SELECT requested_address, requested_lat, proposed_address, proposed_lat FROM "
                 + S + "reservation_change WHERE id = ?", pendingCancel))

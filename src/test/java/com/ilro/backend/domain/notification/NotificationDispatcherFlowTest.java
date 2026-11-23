@@ -163,6 +163,30 @@ class NotificationDispatcherFlowTest {
         assertThat(row(id)).containsEntry("attempt_count", 3);
     }
 
+    @Test
+    @DisplayName("재시도 - 큐에서 오래 기다린 알림도 실패한 시각부터 1분이 지나야 다시 보냄 (생성 시각 기준 아님)")
+    void retryWaitsFromFailure() {
+        smsSender.failFor(phone);
+        long id = notification("RESERVATION_CONFIRMED", reservation("CONFIRMED"), "CONFIRMED", "CUSTOMER", "SMS");
+        // 발송기가 밀려 10분 동안 보내지 못한 알림
+        jdbc.update("UPDATE notification SET created_at = created_at - interval '10 minutes' WHERE id = ?", id);
+
+        dispatchAll();
+        assertThat(row(id)).containsEntry("send_status", "FAILED").containsEntry("attempt_count", 1);
+        // 실패 뒤 1분 전이라 생성 시각이 10분 전이어도 다시 보내지 않음
+        dispatchAll();
+        dispatchAll();
+        assertThat(row(id)).containsEntry("attempt_count", 1);
+
+        ageBy(id, "2 minutes");
+        dispatchAll();
+        assertThat(row(id)).containsEntry("attempt_count", 2);
+        // 두 번째 실패 뒤에는 5분 - 2분만 지나서는 다시 보내지 않음
+        ageBy(id, "2 minutes");
+        dispatchAll();
+        assertThat(row(id)).containsEntry("attempt_count", 2);
+    }
+
     // ---------- 사장님 푸시 ----------
 
     @Test
@@ -271,9 +295,10 @@ class NotificationDispatcherFlowTest {
         return "https://fcm.googleapis.com/fcm/send/" + UUID.randomUUID();
     }
 
-    // 재시도 간격을 기다리는 대신 생성 시각을 앞으로 당김
+    // 재시도 간격을 기다리는 대신 생성 시각·다음 시도 시각을 앞으로 당김
     private void ageBy(long id, String interval) {
-        jdbc.update("UPDATE notification SET created_at = created_at - CAST(? AS interval) WHERE id = ?", interval, id);
+        jdbc.update("UPDATE notification SET created_at = created_at - CAST(? AS interval), "
+                + "next_attempt_at = next_attempt_at - CAST(? AS interval) WHERE id = ?", interval, interval, id);
     }
 
     private Map<String, Object> row(long id) {
