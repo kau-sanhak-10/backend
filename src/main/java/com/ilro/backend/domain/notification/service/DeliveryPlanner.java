@@ -167,10 +167,14 @@ public class DeliveryPlanner {
             // 확정 알림인데 그사이 취소·완료됨
             case RESERVATION_CONFIRMED, NEW_RESERVATION -> reservation.getStatus() == ReservationStatus.CONFIRMED
                     ? null : "reservation " + reservation.getStatus();
-            // 제안 알림인데 고객이 이미 답했거나 기한이 지났거나 예약이 취소됨
-            case CHANGE_PROPOSED -> change != null && change.getStatus() == ReservationChangeStatus.PROPOSED
-                    && !change.isExpiredProposal(now) && reservation.getStatus() == ReservationStatus.CONFIRMED
-                    ? null : "proposal no longer open";
+            // 제안 알림인데 고객이 이미 답했거나 기한이 지났거나 예약이 취소됨, 또는 사장님이 제안을 바꿈
+            case CHANGE_PROPOSED -> {
+                if (change == null || change.getStatus() != ReservationChangeStatus.PROPOSED
+                        || change.isExpiredProposal(now) || reservation.getStatus() != ReservationStatus.CONFIRMED) {
+                    yield "proposal no longer open";
+                }
+                yield isCurrentProposal(notification, change) ? null : "proposal replaced";
+            }
             // 변경 요청 알림인데 사장님이 이미 처리했거나 닫힘
             case CHANGE -> change == null || change.getStatus() == ReservationChangeStatus.REQUESTED
                     ? null : "change request " + change.getStatus();
@@ -179,7 +183,19 @@ public class DeliveryPlanner {
         };
     }
 
-    // 변경 사건의 변경 ID - 중복 키 RESERVATION:{예약ID}:{사건}:{변경ID}:{수신자}:{채널} (ReservationNotifier)
+    // 제안 알림이 지금 제안에 대한 것인지 - 키의 버전(V{n})이 제안의 baseVersion과 같아야 함
+    // 사장님이 답을 기다리는 제안을 바꾸면 baseVersion이 오르고 새 알림이 생김 - 바뀌기 전 알림까지 보내면
+    // (문자 내용은 보낼 때의 제안으로 만들므로) 고객이 같은 제안 문자를 두 번 받음
+    // 버전 칸이 없는 예전 키(BE-12 반영 전)는 지금 제안으로 봄
+    private static boolean isCurrentProposal(Notification notification, ReservationChange change) {
+        String[] parts = notification.getDedupeKey().split(":");
+        if (parts.length < 7 || !parts[4].startsWith("V")) {
+            return true;
+        }
+        return parts[4].equals("V" + change.getBaseVersion());
+    }
+
+    // 변경 사건의 변경 ID - 중복 키 RESERVATION:{예약ID}:{사건}:{변경ID}[:V{버전}]:{수신자}:{채널} (ReservationNotifier)
     private Optional<ReservationChange> changeOf(Notification notification) {
         String[] parts = notification.getDedupeKey().split(":");
         if (parts.length < 6 || !parts[3].chars().allMatch(Character::isDigit)) {

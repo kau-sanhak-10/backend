@@ -120,6 +120,24 @@ class NotificationDispatcherFlowTest {
     }
 
     @Test
+    @DisplayName("변경 제안 문자 - 보내기 전에 사장님이 제안을 바꿨으면 바뀌기 전 문자는 SKIPPED, 바뀐 제안 문자만 보냄")
+    void replacedProposal() {
+        long reservation = reservation("CONFIRMED");
+        long change = change(reservation, "PROPOSED", "now() + interval '1 day'");
+        long beforeId = notification("CHANGE_PROPOSED", reservation, "CHANGE_PROPOSED:" + change + ":V0",
+                "CUSTOMER", "SMS");
+        // 사장님이 제안을 바꿈 - 제안의 baseVersion이 오르고 그 버전으로 새 알림이 생김 (ReservationChangeService)
+        jdbc.update("UPDATE reservation_change SET base_version = 1 WHERE id = ?", change);
+        long afterId = notification("CHANGE_PROPOSED", reservation, "CHANGE_PROPOSED:" + change + ":V1",
+                "CUSTOMER", "SMS");
+
+        dispatchAll();
+
+        assertThat(row(beforeId)).containsEntry("send_status", "SKIPPED");
+        assertThat(row(afterId)).containsEntry("send_status", "SENT");
+    }
+
+    @Test
     @DisplayName("재시도 - 실패하면 FAILED, 1분·5분 지나야 다시 보내고 3번 실패하면 더 안 보냄")
     void retriesWithBackoff() {
         smsSender.failFor(phone);
