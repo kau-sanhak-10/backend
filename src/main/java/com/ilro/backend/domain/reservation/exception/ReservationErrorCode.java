@@ -54,6 +54,15 @@ public enum ReservationErrorCode implements ErrorCode {
     // result: contactPhone - 완료 예약은 화면에서 취소하지 않고 업체에 문의 (BE-12)
     RESERVATION_COMPLETED(HttpStatus.CONFLICT, "RESERVATION_COMPLETED", "작업이 끝난 예약이에요. 업체에 문의해 주세요"),
 
+    // ---------- 작업 완료·정정 (명세 4.6 B-25, BE-13) ----------
+
+    // 취소 예약을 완료·정정하려 함
+    RESERVATION_CANCELED(HttpStatus.CONFLICT, "RESERVATION_CANCELED", "취소된 예약은 완료 처리할 수 없어요"),
+    // result: startAt - 방문 시작 시각 전에 완료하려 함 (명세에 없음, BE-13에서 추가)
+    RESERVATION_NOT_STARTED(HttpStatus.CONFLICT, "RESERVATION_NOT_STARTED", "방문 시작 시각이 지난 뒤 완료할 수 있어요"),
+    // result: status - 완료되지 않은 예약을 정정하려 함 (명세에 없음, BE-13에서 추가)
+    RESERVATION_NOT_COMPLETED(HttpStatus.CONFLICT, "RESERVATION_NOT_COMPLETED", "완료된 예약만 정정할 수 있어요"),
+
     // ---------- 예약 변경 (명세 5.3, BE-12) ----------
 
     // result: change

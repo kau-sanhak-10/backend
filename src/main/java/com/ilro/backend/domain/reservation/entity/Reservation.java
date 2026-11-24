@@ -121,6 +121,16 @@ public class Reservation extends BaseTimeEntity {
         this.status = ReservationStatus.CANCELED;
     }
 
+    // 작업 완료 (B-25) - version은 저장할 때 1 오름
+    public void complete() {
+        this.status = ReservationStatus.COMPLETED;
+    }
+
+    // 실수로 한 완료 정정 (B-25) - 다시 확정으로, version은 저장할 때 1 오름
+    public void correctCompletion() {
+        this.status = ReservationStatus.CONFIRMED;
+    }
+
     // status를 주지 않으면 REQUESTED - 고객 예약 확정(BE-11)·수동 예약(BE-12)은 처음부터 CONFIRMED
     @Builder
     private Reservation(Inquiry inquiry, Owner owner, Customer customer, Instant startAt, Instant endAt,

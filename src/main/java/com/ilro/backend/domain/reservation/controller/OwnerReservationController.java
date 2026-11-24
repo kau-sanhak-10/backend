@@ -2,12 +2,16 @@ package com.ilro.backend.domain.reservation.controller;
 
 import com.ilro.backend.domain.reservation.dto.ChangeProposalRequest;
 import com.ilro.backend.domain.reservation.dto.ChangeSnapshot;
+import com.ilro.backend.domain.reservation.dto.CompleteCorrectionRequest;
+import com.ilro.backend.domain.reservation.dto.CompleteCorrectionResponse;
 import com.ilro.backend.domain.reservation.dto.ManualReservationRequest;
 import com.ilro.backend.domain.reservation.dto.ManualReservationResponse;
 import com.ilro.backend.domain.reservation.dto.OwnerChangeRequestsResponse;
 import com.ilro.backend.domain.reservation.dto.OwnerScheduleResponse;
 import com.ilro.backend.domain.reservation.dto.ReservationCancelRequest;
 import com.ilro.backend.domain.reservation.dto.ReservationCancelResponse;
+import com.ilro.backend.domain.reservation.dto.ReservationCompleteRequest;
+import com.ilro.backend.domain.reservation.dto.ReservationCompleteResponse;
 import com.ilro.backend.domain.reservation.dto.WorkNoteRequest;
 import com.ilro.backend.domain.reservation.dto.WorkNoteResponse;
 import com.ilro.backend.domain.reservation.entity.ReservationChangeStatus;
@@ -15,6 +19,7 @@ import com.ilro.backend.domain.reservation.service.ManualReservationService;
 import com.ilro.backend.domain.reservation.service.OwnerScheduleService;
 import com.ilro.backend.domain.reservation.service.ReservationCancelService;
 import com.ilro.backend.domain.reservation.service.ReservationChangeService;
+import com.ilro.backend.domain.reservation.service.ReservationCompleteService;
 import com.ilro.backend.domain.reservation.service.WorkNoteService;
 import com.ilro.backend.global.auth.AuthPrincipal;
 import com.ilro.backend.global.common.response.ApiResponse;
@@ -47,6 +52,7 @@ public class OwnerReservationController {
     private final ManualReservationService manualReservationService;
     private final ReservationChangeService changeService;
     private final ReservationCancelService cancelService;
+    private final ReservationCompleteService completeService;
     private final WorkNoteService workNoteService;
 
     // B-17·B-28 기간별 예약·차단 시간·이동/작업/여유시간 - from~to(yyyy-MM-dd, 둘 다 포함, 31일까지)
@@ -83,6 +89,21 @@ public class OwnerReservationController {
     public ApiResponse<ReservationCancelResponse> cancel(AuthPrincipal principal, @PathVariable Long reservationId,
                                                          @Valid @RequestBody ReservationCancelRequest request) {
         return ApiResponse.onSuccess(cancelService.cancelByOwner(principal.ownerId(), reservationId, request));
+    }
+
+    // B-25 작업 완료 - 방문 시작 시각부터, 진행 중 변경 요청은 함께 닫음
+    @PostMapping("/reservations/{reservationId}/complete")
+    public ApiResponse<ReservationCompleteResponse> complete(AuthPrincipal principal, @PathVariable Long reservationId,
+                                                             @Valid @RequestBody ReservationCompleteRequest request) {
+        return ApiResponse.onSuccess(completeService.complete(principal.ownerId(), reservationId, request));
+    }
+
+    // B-25 실수로 한 완료 정정 - reason 필수, 확정으로 되돌리고 이력에 남김
+    @PostMapping("/reservations/{reservationId}/complete-correction")
+    public ApiResponse<CompleteCorrectionResponse> correctCompletion(
+            AuthPrincipal principal, @PathVariable Long reservationId,
+            @Valid @RequestBody CompleteCorrectionRequest request) {
+        return ApiResponse.onSuccess(completeService.correct(principal.ownerId(), reservationId, request));
     }
 
     // B-24 작업 메모 - 없으면 빈 내용
