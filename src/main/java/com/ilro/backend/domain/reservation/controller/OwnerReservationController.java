@@ -7,6 +7,7 @@ import com.ilro.backend.domain.reservation.dto.CompleteCorrectionResponse;
 import com.ilro.backend.domain.reservation.dto.ManualReservationRequest;
 import com.ilro.backend.domain.reservation.dto.ManualReservationResponse;
 import com.ilro.backend.domain.reservation.dto.OwnerChangeRequestsResponse;
+import com.ilro.backend.domain.reservation.dto.OwnerReservationDetailResponse;
 import com.ilro.backend.domain.reservation.dto.OwnerScheduleResponse;
 import com.ilro.backend.domain.reservation.dto.ReservationCancelRequest;
 import com.ilro.backend.domain.reservation.dto.ReservationCancelResponse;
@@ -16,6 +17,7 @@ import com.ilro.backend.domain.reservation.dto.WorkNoteRequest;
 import com.ilro.backend.domain.reservation.dto.WorkNoteResponse;
 import com.ilro.backend.domain.reservation.entity.ReservationChangeStatus;
 import com.ilro.backend.domain.reservation.service.ManualReservationService;
+import com.ilro.backend.domain.reservation.service.OwnerReservationService;
 import com.ilro.backend.domain.reservation.service.OwnerScheduleService;
 import com.ilro.backend.domain.reservation.service.ReservationCancelService;
 import com.ilro.backend.domain.reservation.service.ReservationChangeService;
@@ -49,6 +51,7 @@ import java.util.List;
 public class OwnerReservationController {
 
     private final OwnerScheduleService scheduleService;
+    private final OwnerReservationService reservationService;
     private final ManualReservationService manualReservationService;
     private final ReservationChangeService changeService;
     private final ReservationCancelService cancelService;
@@ -75,6 +78,13 @@ public class OwnerReservationController {
                 manualReservationService.create(principal.ownerId(), idempotencyKey, request);
         return ResponseEntity.status(outcome.created() ? HttpStatus.CREATED : HttpStatus.OK)
                 .body(ApiResponse.onSuccess(outcome.response()));
+    }
+
+    // B-23 방문 작업정보
+    @GetMapping("/reservations/{reservationId}")
+    public ApiResponse<OwnerReservationDetailResponse> reservation(AuthPrincipal principal,
+                                                                   @PathVariable Long reservationId) {
+        return ApiResponse.onSuccess(reservationService.detail(principal, reservationId));
     }
 
     // B-19·B-21 새 방문일시 제안 - changeId가 있으면 고객 요청에 답, 없으면 업체 사유 변경
