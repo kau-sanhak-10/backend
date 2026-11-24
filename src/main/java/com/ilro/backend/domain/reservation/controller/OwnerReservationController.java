@@ -8,11 +8,14 @@ import com.ilro.backend.domain.reservation.dto.OwnerChangeRequestsResponse;
 import com.ilro.backend.domain.reservation.dto.OwnerScheduleResponse;
 import com.ilro.backend.domain.reservation.dto.ReservationCancelRequest;
 import com.ilro.backend.domain.reservation.dto.ReservationCancelResponse;
+import com.ilro.backend.domain.reservation.dto.WorkNoteRequest;
+import com.ilro.backend.domain.reservation.dto.WorkNoteResponse;
 import com.ilro.backend.domain.reservation.entity.ReservationChangeStatus;
 import com.ilro.backend.domain.reservation.service.ManualReservationService;
 import com.ilro.backend.domain.reservation.service.OwnerScheduleService;
 import com.ilro.backend.domain.reservation.service.ReservationCancelService;
 import com.ilro.backend.domain.reservation.service.ReservationChangeService;
+import com.ilro.backend.domain.reservation.service.WorkNoteService;
 import com.ilro.backend.global.auth.AuthPrincipal;
 import com.ilro.backend.global.common.response.ApiResponse;
 import com.ilro.backend.global.common.util.RequestFingerprint;
@@ -24,6 +27,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -33,7 +37,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.time.LocalDate;
 import java.util.List;
 
-// 사장님 일정·예약 (명세 4.5·5.3·5.4, BE-12) - 업체는 토큰으로만 정해져 다른 업체 예약에 닿을 수 없음 (남의 예약은 404)
+// 사장님 일정·예약 (명세 4.6·5.3·5.4, BE-12·BE-13) - 업체는 토큰으로만 정해져 다른 업체 예약에 닿을 수 없음 (남의 예약은 404)
 @RestController
 @RequestMapping("/api/v1/owner")
 @RequiredArgsConstructor
@@ -43,6 +47,7 @@ public class OwnerReservationController {
     private final ManualReservationService manualReservationService;
     private final ReservationChangeService changeService;
     private final ReservationCancelService cancelService;
+    private final WorkNoteService workNoteService;
 
     // B-17·B-28 기간별 예약·차단 시간·이동/작업/여유시간 - from~to(yyyy-MM-dd, 둘 다 포함, 31일까지)
     @GetMapping("/schedule")
@@ -78,6 +83,19 @@ public class OwnerReservationController {
     public ApiResponse<ReservationCancelResponse> cancel(AuthPrincipal principal, @PathVariable Long reservationId,
                                                          @Valid @RequestBody ReservationCancelRequest request) {
         return ApiResponse.onSuccess(cancelService.cancelByOwner(principal.ownerId(), reservationId, request));
+    }
+
+    // B-24 작업 메모 - 없으면 빈 내용
+    @GetMapping("/reservations/{reservationId}/work-note")
+    public ApiResponse<WorkNoteResponse> workNote(AuthPrincipal principal, @PathVariable Long reservationId) {
+        return ApiResponse.onSuccess(workNoteService.get(principal.ownerId(), reservationId));
+    }
+
+    // B-24 작업 메모 저장 - 메모 전체를 바꿈, 빈 문자열이면 비움
+    @PutMapping("/reservations/{reservationId}/work-note")
+    public ApiResponse<WorkNoteResponse> saveWorkNote(AuthPrincipal principal, @PathVariable Long reservationId,
+                                                      @Valid @RequestBody WorkNoteRequest request) {
+        return ApiResponse.onSuccess(workNoteService.save(principal.ownerId(), reservationId, request));
     }
 
     // B-21 고객 변경 요청·제안 대기 목록 - status 없으면 REQUESTED·PROPOSED (status=REQUESTED,PROPOSED처럼 여럿)

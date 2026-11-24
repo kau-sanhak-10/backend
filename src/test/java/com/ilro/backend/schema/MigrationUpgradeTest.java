@@ -7,6 +7,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import javax.sql.DataSource;
@@ -15,6 +16,7 @@ import java.time.Instant;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 // 마이그레이션을 빈 DB와 V1 데이터가 있는 DB 모두에 적용해 보는 테스트
 // 기본 스키마(public)와 섞이지 않게 따로 만든 스키마에서 돌리고 끝나면 지움
@@ -42,14 +44,14 @@ class MigrationUpgradeTest {
     void migratesEmptyDatabase() {
         flyway(null).migrate();
 
-        assertThat(currentVersion()).isEqualTo("6");
+        assertThat(currentVersion()).isEqualTo("7");
         assertThat(jdbc.queryForObject(
                 "SELECT count(*) FROM information_schema.tables WHERE table_schema = ? AND table_name <> "
                         + "'flyway_schema_history'", Integer.class, SCHEMA)).isEqualTo(23);
     }
 
     @Test
-    @DisplayName("V1 데이터가 있는 DB도 V6까지 올라가며 이전 데이터의 변환 규칙을 유지한다")
+    @DisplayName("V1 데이터가 있는 DB도 V7까지 올라가며 이전 데이터의 변환 규칙을 유지한다")
     void migratesV1Data() {
         flyway("1").migrate();
         Instant now = Instant.now();
@@ -95,9 +97,18 @@ class MigrationUpgradeTest {
                 + "'NEW_RESERVATION', 'RESERVATION', ?, 'SMS', 'v1-sent', 'SENT', 1) RETURNING id",
                 autoOwner, keyed);
 
+        // 예약에 남긴 작업 메모
+        insertWorkNote(keyed, "배기통 점검 필요");
+
         flyway(null).migrate();
 
-        assertThat(currentVersion()).isEqualTo("6");
+        assertThat(currentVersion()).isEqualTo("7");
+        // V7: 기존 작업 메모는 그대로, 같은 예약에 두 번째 메모는 막음
+        assertThat(jdbc.queryForObject("SELECT content FROM " + S + "work_note WHERE reservation_id = ?",
+                String.class, keyed)).isEqualTo("배기통 점검 필요");
+        assertThatThrownBy(() -> insertWorkNote(keyed, "두 번째 메모"))
+                .isInstanceOf(DuplicateKeyException.class)
+                .hasMessageContaining("uq_work_note_reservation");
         // V6: 재시도를 기다리던 실패 알림은 다음 시도 시각이 생겨 바로 다시 골라짐, 보낸 알림은 비어 있음
         assertThat(jdbc.queryForObject("SELECT next_attempt_at IS NOT NULL AND next_attempt_at <= CURRENT_TIMESTAMP "
                 + "FROM " + S + "notification WHERE id = ?", Boolean.class, failedNotification)).isTrue();
@@ -218,6 +229,10 @@ class MigrationUpgradeTest {
                         + "'2099-01-05T11:00:00+09:00', " + proposedStartSql + ", " + proposedEndSql + ", ?, 0) "
                         + "RETURNING id",
                 reservationId, type, status);
+    }
+
+    private void insertWorkNote(long reservationId, String content) {
+        jdbc.update("INSERT INTO " + S + "work_note (reservation_id, content) VALUES (?, ?)", reservationId, content);
     }
 
     private Map<String, Object> change(long changeId) {
