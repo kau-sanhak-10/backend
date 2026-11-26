@@ -39,12 +39,10 @@ import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -407,13 +405,26 @@ class AdminPrivacyFlowTest {
                 // 두 번째 문의가 아직 가리키고 있어서 고객은 남김
                 assertThat(deleted.customerDeleted()).isFalse();
                 Future<Deleted> erasing = executor.submit(() -> eraser.erase(second.inquiryId(), now, null));
+                // 두 번째 처리의 고객 조회가 첫 처리가 잡은 잠금을 기다리는 것을 DB에서 확인한 뒤에 첫 처리를 끝냄
+                // (시간만 기다리면 두 번째가 늦게 시작해 첫 처리 뒤에 돌아도 통과함 - 겹쳤다는 증거가 되지 않음)
+                boolean waitingOnCustomerLock = false;
+                long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(2500);
                 try {
-                    erasing.get(1, TimeUnit.SECONDS);
-                } catch (TimeoutException waitingForLock) {
-                    // 고객 행 잠금을 기다리는 중 - 첫 처리가 끝나야 진행
-                } catch (InterruptedException | ExecutionException e) {
+                    while (!waitingOnCustomerLock && !erasing.isDone() && System.nanoTime() < deadline) {
+                        // 이 트랜잭션(첫 삭제)이 끝나기를 기다리는 다른 연결의 조회(select ... for update)가 있는지
+                        waitingOnCustomerLock = jdbc.queryForObject("SELECT count(*) FROM pg_locks l "
+                                + "JOIN pg_stat_activity a ON a.pid = l.pid WHERE NOT l.granted "
+                                + "AND l.locktype = 'transactionid' AND l.transactionid = pg_current_xact_id()::xid "
+                                + "AND a.query ILIKE 'select%'", Integer.class) > 0;
+                        if (!waitingOnCustomerLock) {
+                            Thread.sleep(20);
+                        }
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
                     throw new IllegalStateException(e);
                 }
+                assertThat(waitingOnCustomerLock).as("두 번째 삭제의 고객 조회가 첫 삭제의 잠금을 기다려야 함").isTrue();
                 return erasing;
             });
 
