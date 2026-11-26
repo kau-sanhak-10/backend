@@ -27,7 +27,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.endsWith;
@@ -441,11 +440,21 @@ class AdminOwnerFlowTest {
                     changeLoginPhone(superAdmin, ownerId, newPhone, verificationId).andExpect(status().isOk());
                     Future<MvcResult> confirming = executor.submit(
                             () -> confirm(loginVerificationId, code).andReturn());
-                    try {
-                        confirming.get(1, TimeUnit.SECONDS);
-                    } catch (TimeoutException waitingForLock) {
-                        // 업체 행 잠금을 기다리는 중 - 번호 변경이 끝나야 진행
+                    // 로그인 확인의 업체 조회가 번호 변경이 잡은 잠금을 기다리는 것을 DB에서 확인한 뒤에 번호 변경을 끝냄
+                    // (시간만 기다리면 확인이 늦게 시작해 번호 변경 뒤에 처리돼도 통과함 - 겹쳤다는 증거가 되지 않음)
+                    boolean waitingOnOwnerLock = false;
+                    long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(2500);
+                    while (!waitingOnOwnerLock && !confirming.isDone() && System.nanoTime() < deadline) {
+                        // 이 트랜잭션(번호 변경)이 끝나기를 기다리는 다른 연결의 조회(select ... for update)가 있는지
+                        waitingOnOwnerLock = jdbc.queryForObject("SELECT count(*) FROM pg_locks l "
+                                + "JOIN pg_stat_activity a ON a.pid = l.pid WHERE NOT l.granted "
+                                + "AND l.locktype = 'transactionid' AND l.transactionid = pg_current_xact_id()::xid "
+                                + "AND a.query ILIKE 'select%'", Integer.class) > 0;
+                        if (!waitingOnOwnerLock) {
+                            Thread.sleep(20);
+                        }
                     }
+                    assertThat(waitingOnOwnerLock).as("로그인 확인의 업체 조회가 번호 변경의 잠금을 기다려야 함").isTrue();
                     return confirming;
                 } catch (Exception e) {
                     throw new IllegalStateException(e);
