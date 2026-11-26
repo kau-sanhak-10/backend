@@ -52,7 +52,7 @@ class KakaoMapClientTest {
     }
 
     @Test
-    @DisplayName("이동시간 - 경도,위도 순서·KakaoAK 헤더, 초는 분으로 올림 (1104초 → 19분)")
+    @DisplayName("길찾기 한 번으로 도로 거리와 이동시간을 얻고, 초는 분으로 올림 (1104초 → 19분)")
     void travelMinutes() {
         navi.expect(requestTo(startsWith(DIRECTIONS_URL)))
                 .andExpect(method(HttpMethod.GET))
@@ -64,7 +64,17 @@ class KakaoMapClientTest {
                                      "summary": {"distance": 4210, "duration": 1104}}]}""",
                         MediaType.APPLICATION_JSON));
 
-        assertThat(map.carTravelMinutes(HWAJEONG, KAU)).hasValue(19);
+        assertThat(map.carTravel(HWAJEONG, KAU)).contains(new MapClient.TravelEstimate(19, 4210));
+        navi.verify();
+    }
+
+    @Test
+    @DisplayName("거리 정보가 없으면 추정 거리를 만들지 않고 이동시간만 유지")
+    void travelWithoutDistance() {
+        navi.expect(requestTo(startsWith(DIRECTIONS_URL))).andRespond(withSuccess(
+                "{\"routes\":[{\"result_code\":0,\"summary\":{\"duration\":61}}]}",
+                MediaType.APPLICATION_JSON));
+        assertThat(map.carTravel(HWAJEONG, KAU)).contains(new MapClient.TravelEstimate(2, null));
         navi.verify();
     }
 

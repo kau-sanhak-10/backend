@@ -4,7 +4,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
-import java.util.OptionalInt;
+import java.util.Optional;
 
 // 가짜 지도 - 로컬·테스트에서 카카오 키 없이 방문 가능 시간 화면을 만들 수 있게 (실제 도로·지역 아님)
 // 이동시간: 두 좌표의 직선거리 × 1.3을 시속 30km로 달린 시간, 5분 단위로 올림 (같은 곳이면 0분)
@@ -19,12 +19,14 @@ public class FakeMapClient implements MapClient {
     private static final double SPEED_KMH = 30.0;
 
     @Override
-    public OptionalInt carTravelMinutes(GeoPoint from, GeoPoint to) {
+    public Optional<TravelEstimate> carTravel(GeoPoint from, GeoPoint to) {
         if (from.equals(to)) {
-            return OptionalInt.of(0);
+            return Optional.of(new TravelEstimate(0, 0));
         }
-        double minutes = distanceKm(from, to) * ROAD_FACTOR / SPEED_KMH * 60;
-        return OptionalInt.of(Math.max(5, (int) Math.ceil(minutes / 5) * 5));
+        double km = distanceKm(from, to) * ROAD_FACTOR;
+        double minutes = km / SPEED_KMH * 60;
+        return Optional.of(new TravelEstimate(Math.max(5, (int) Math.ceil(minutes / 5) * 5),
+                (int) Math.round(km * 1000)));
     }
 
     @Override

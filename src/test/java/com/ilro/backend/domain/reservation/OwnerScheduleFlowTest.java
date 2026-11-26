@@ -435,6 +435,7 @@ class OwnerScheduleFlowTest {
                 // 첫 방문 - 출발지에서 (같은 좌표 0분), 여유시간은 앞 방문이 없어 null
                 .andExpect(jsonPath("$.result.days[0].visits[0].travelStatus").value("OK"))
                 .andExpect(jsonPath("$.result.days[0].visits[0].travelMinutes").value(0))
+                .andExpect(jsonPath("$.result.days[0].visits[0].travelDistanceMeters").value(0))
                 .andExpect(jsonPath("$.result.days[0].visits[0].bufferMinutes").doesNotExist())
                 .andExpect(jsonPath("$.result.days[0].visits[0].workMinutes").value(60))
                 .andExpect(jsonPath("$.result.days[0].visits[0].customerName").value("김고객"))
@@ -444,6 +445,7 @@ class OwnerScheduleFlowTest {
                 // 둘째 방문 - 앞 방문지에서 오는 이동시간 + 여유시간 15분, 남는 시간
                 .andExpect(jsonPath("$.result.days[0].visits[1].previousReservationId").value((int) first))
                 .andExpect(jsonPath("$.result.days[0].visits[1].travelMinutes").value(greaterThan(0)))
+                .andExpect(jsonPath("$.result.days[0].visits[1].travelDistanceMeters").value(greaterThan(0)))
                 .andExpect(jsonPath("$.result.days[0].visits[1].bufferMinutes").value(15))
                 .andExpect(jsonPath("$.result.days[0].visits[1].slackMinutes").value(greaterThan(0)))
                 .andExpect(jsonPath("$.result.days[0].visits[1].travelStatus").value("OK"))
@@ -452,6 +454,7 @@ class OwnerScheduleFlowTest {
                 .andExpect(jsonPath("$.result.days[0].visits[2].status").value("COMPLETED"))
                 .andExpect(jsonPath("$.result.days[0].visits[2].travelStatus").value("UNKNOWN"))
                 .andExpect(jsonPath("$.result.days[0].visits[2].travelMinutes").doesNotExist())
+                .andExpect(jsonPath("$.result.days[0].visits[2].travelDistanceMeters").doesNotExist())
                 .andExpect(jsonPath("$.result.days[1].visits", hasSize(0)))
                 .andExpect(jsonPath("$.result.days[1].needsCheck").value(false))
                 // 토요일 휴무

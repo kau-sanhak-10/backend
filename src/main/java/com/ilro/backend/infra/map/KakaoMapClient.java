@@ -16,7 +16,6 @@ import java.net.http.HttpClient;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
-import java.util.OptionalInt;
 import java.util.function.Supplier;
 
 // 카카오 지도 (dev·prod, BE-15) - 이동시간은 카카오모빌리티 자동차 길찾기, 서비스 지역은 좌표 → 법정동 코드
@@ -61,9 +60,9 @@ public class KakaoMapClient implements MapClient {
     }
 
     @Override
-    public OptionalInt carTravelMinutes(GeoPoint from, GeoPoint to) {
+    public Optional<TravelEstimate> carTravel(GeoPoint from, GeoPoint to) {
         if (from.equals(to)) {
-            return OptionalInt.of(0);
+            return Optional.of(new TravelEstimate(0, 0));
         }
         DirectionsResponse response = call("카카오 길찾기", () -> naviClient.get()
                 .uri(uri -> uri.path("/v1/directions")
@@ -79,15 +78,18 @@ public class KakaoMapClient implements MapClient {
         }
         Route route = response.routes().get(0);
         if (route.resultCode() == ROUTE_TOO_CLOSE) {
-            return OptionalInt.of(0);
+            return Optional.of(new TravelEstimate(0, null));
         }
         if (route.resultCode() != ROUTE_OK || route.summary() == null) {
             // 길이 없음·주변에 도로 없음 등 - 지도가 '셀 수 없다'고 답함 (장애 아님)
             log.info("카카오 길찾기 경로 없음: resultCode={}", route.resultCode());
-            return OptionalInt.empty();
+            return Optional.empty();
         }
         // 초 → 분, 올림 (61초는 2분)
-        return OptionalInt.of((route.summary().duration() + 59) / 60);
+        Summary summary = route.summary();
+        Integer distance = summary.distance();
+        return Optional.of(new TravelEstimate((summary.duration() + 59) / 60,
+                distance != null && distance >= 0 ? distance : null));
     }
 
     @Override
@@ -153,9 +155,9 @@ public class KakaoMapClient implements MapClient {
     record Route(@JsonProperty("result_code") int resultCode, Summary summary) {
     }
 
-    // duration: 초
+    // duration: 초, distance: 미터
     @JsonIgnoreProperties(ignoreUnknown = true)
-    record Summary(int duration) {
+    record Summary(int duration, Integer distance) {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

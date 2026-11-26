@@ -44,7 +44,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.OptionalInt;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -101,15 +101,15 @@ class TravelTimeFlowTest {
         }
 
         @Override
-        public OptionalInt carTravelMinutes(GeoPoint from, GeoPoint to) {
+        public Optional<TravelEstimate> carTravel(GeoPoint from, GeoPoint to) {
             asked.add(List.of(from, to));
             if (travelFails) {
                 throw new IllegalStateException("지도 응답 시간 초과");
             }
             if (noRoute) {
-                return OptionalInt.empty();
+                return Optional.empty();
             }
-            return OptionalInt.of(minutes.getOrDefault(List.of(from, to), 20));
+            return Optional.of(new TravelEstimate(minutes.getOrDefault(List.of(from, to), 20), null));
         }
 
         @Override
