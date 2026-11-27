@@ -12,6 +12,11 @@ spring:
     open-in-view: false
     hibernate:
       ddl-auto: validate
+  task:
+    scheduling:
+      pool:
+        # 스케줄 작업 스레드 수 - AI 재확인·제안 만료·알림 발송(BE-14)이 서로 기다리지 않게
+        size: 3
 
 server:
   port: ${SERVER_PORT:8080}
@@ -63,6 +68,8 @@ app:
   booking:
     # 방문 가능 시간 후보 간격 - 영업 시작부터 이 간격마다 (C-12)
     slot-step: 30m
+    # 기한이 지난 시간 변경 제안을 EXPIRED로 바꾸는 간격 (명세 5.3, BE-16) - 수락할 때도 기한을 다시 봄
+    proposal-expiry-interval: PT1M
   map:
     # 같은 두 지점(방향 구분)의 자동차 이동시간은 이 시간 동안 지도에 다시 묻지 않음 (BE-10)
     travel-cache-ttl: 6h
@@ -90,6 +97,15 @@ app:
     retention-days: ${PRIVACY_RETENTION_DAYS:}
 
   push:
-    # Web Push(VAPID) 공개키 - 브라우저가 구독할 때 받음 (B-27, BE-14). 비밀키는 발송(3단계)에서 추가
-    # 서버(dev·prod)는 Parameter Store, 로컬은 .env (비어 있으면 공개키 API가 503)
+    # Web Push(VAPID) 키 한 쌍 (B-27, BE-14) - npx web-push generate-vapid-keys
+    # 서버(dev·prod)는 Parameter Store, 비어 있거나 짝이 안 맞으면 서버가 뜨지 않음 (배포 실패 → 자동 롤백)
+    # 로컬은 .env - 비어 있으면 공개키 API가 503이고 푸시는 로그만 남김
     vapid-public-key: ${VAPID_PUBLIC_KEY:}
+    vapid-private-key: ${VAPID_PRIVATE_KEY:}
+    # 푸시 서버(구글·애플 등)가 문제 있을 때 연락할 곳 (VAPID sub, https 또는 mailto) - 기본은 고객 접수 화면 주소
+    vapid-subject: ${VAPID_SUBJECT:${app.intake.base-url}}
+  notification:
+    # 쌓인 알림(문자·푸시)을 보내는 간격 (명세 5.10) - 예약 저장이 끝난 뒤 이 간격 안에 나감
+    dispatch-interval: PT10S
+    # 한 번에 보내는 알림 수 - 남은 것은 다음 차례에
+    dispatch-batch-size: 50

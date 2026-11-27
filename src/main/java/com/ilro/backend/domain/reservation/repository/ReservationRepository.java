@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -18,6 +19,18 @@ public interface ReservationRepository extends JpaRepository<Reservation, Long> 
 
     // 예약 확정 요청 키 (명세 1.6) - 같은 키가 다시 오면 지문을 비교해 처음 결과 또는 409
     Optional<Reservation> findByIdempotencyKey(String idempotencyKey);
+
+    // 사장님 예약 - 다른 업체 예약은 없는 것처럼 (BE-12)
+    Optional<Reservation> findByIdAndOwnerId(Long id, Long ownerId);
+
+    // 사장님 탈퇴 확인 (B-04, BE-16) - 끝나지 않은 예약 수 (지난 방문도 완료 처리 전이면 셈)
+    long countByOwnerIdAndStatusIn(Long ownerId, Collection<ReservationStatus> statuses);
+
+    // 차단 시간과 겹치는 확정 예약 (B-22)
+    @Query("select r from Reservation r where r.owner.id = :ownerId and r.status = :status "
+            + "and r.startAt < :to and r.endAt > :from order by r.startAt, r.id")
+    List<Reservation> findOverlappingWithStatus(@Param("ownerId") Long ownerId, @Param("from") Instant from,
+                                                @Param("to") Instant to, @Param("status") ReservationStatus status);
 
     // 고객 예약 조회 (C-14, BE-11) - 그 업체에서 이 번호로 잡은 예약, 방문일이 늦은 것부터 (취소·완료 포함)
     @Query("select r from Reservation r join fetch r.customer c left join fetch r.workType "

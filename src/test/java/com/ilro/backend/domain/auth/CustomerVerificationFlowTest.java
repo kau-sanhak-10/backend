@@ -189,10 +189,17 @@ class CustomerVerificationFlowTest {
         Session first = startWithVisitInfo(link, phone);
         Session closed = startWithVisitInfo(link, phone);
         Session latest = startWithVisitInfo(link, phone);
+        Session unverified = startWithVisitInfo(link, phone);
+        Session changed = startWithVisitInfo(link, accounts.newPhone());
         Session deleted = startWithVisitInfo(link, phone);
         Session otherPhone = startWithVisitInfo(link, accounts.newPhone());
         long otherOwnerId = accounts.approvedOwner(accounts.newPhone());
         Session otherOwner = startWithVisitInfo(accounts.linkToken(otherOwnerId), phone);
+        for (Session verified : new Session[]{first, closed, latest, deleted, changed, otherPhone, otherOwner}) {
+            jdbc.update("UPDATE inquiry SET phone_verified_at = now() WHERE id = ?", verified.inquiryId());
+        }
+        putAs(changed.token(), changed.path("/visit-info"), visitInfo(version(changed), phone))
+                .andExpect(status().isOk());
         jdbc.update("UPDATE inquiry SET status = 'CLOSED' WHERE id = ?", closed.inquiryId());
         jdbc.update("UPDATE inquiry SET deleted_at = now() WHERE id = ?", deleted.inquiryId());
 
@@ -227,7 +234,7 @@ class CustomerVerificationFlowTest {
         // 고객 토큰으로는 문의 내용을 바로 볼 수 없음
         getAs(customerToken, first.path("")).andExpect(status().isForbidden());
 
-        for (Session hidden : new Session[]{otherPhone, otherOwner, deleted}) {
+        for (Session hidden : new Session[]{otherPhone, otherOwner, deleted, unverified, changed}) {
             postAs(customerToken, "/api/v1/customer/inquiries/" + hidden.inquiryId() + "/access-token")
                     .andExpect(status().isNotFound())
                     .andExpect(jsonPath("$.code").value("INQUIRY_NOT_FOUND"));
@@ -271,6 +278,7 @@ class CustomerVerificationFlowTest {
         assertThat(smsSender.hasSentTo(phone)).isFalse();
 
         Session session = startWithVisitInfo(link, phone);
+        jdbc.update("UPDATE inquiry SET phone_verified_at = now() WHERE id = ?", session.inquiryId());
         jdbc.update("UPDATE owner SET status = 'RESTRICTED' WHERE id = ?", ownerId);
         getAs(recoveryToken(phone), RECOVERY)
                 .andExpect(status().isOk())

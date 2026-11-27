@@ -26,7 +26,6 @@ import com.ilro.backend.global.exception.BusinessException;
 import com.ilro.backend.global.exception.CommonErrorCode;
 import com.ilro.backend.global.exception.ConstraintErrorMapper;
 import com.ilro.backend.infra.map.GeoPoint;
-import com.ilro.backend.infra.map.ServiceAreaMatch;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -35,7 +34,6 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -142,15 +140,17 @@ public class ReservationConfirmService {
 
     private Precheck precheck(AuthPrincipal principal, Long inquiryId, Instant startAt) {
         Inquiry inquiry = inquiryAccess.find(principal, inquiryId);
-        AskedAreas areas = new AskedAreas(mapLookup::serviceArea);
-        TravelTimes travel = visitSchedule.newTravelRequest();
-        SlotCheck check = check(inquiry, startAt, areas, travel);
+        requireBookable(inquiry);
         // 후보 조회가 내놓지 않는 시각(30분 간격인데 10:07 같은)은 다른 검사를 통과해도 받지 않음
-        // 사장님 확인으로 넘기기(422) 전에 봄 - 잘못 보낸 시각 때문에 문의가 넘어가지 않게
+        // 지도를 부르거나 사장님 확인으로 넘기는(422) 검사보다 먼저 봄 - 잘못 보낸 시각 때문에 지도를 부르거나
+        // 문의가 사장님 확인으로 넘어가지 않게 (상담 상태·기존 예약 안내는 DB만 읽으므로 그보다 앞)
         if (!slotGrid.offers(inquiry.getOwner(), startAt)) {
             throw new BusinessException(CommonErrorCode.INVALID_INPUT,
                     List.of(new FieldErrorResponse("startAt", "고를 수 있는 시각이 아닙니다")));
         }
+        AskedAreas areas = new AskedAreas(mapLookup::serviceArea);
+        TravelTimes travel = visitSchedule.newTravelRequest();
+        SlotCheck check = slotCheck(inquiry, startAt, areas, travel);
         if (check.travelUnknown()) {
             throw new AskOwner(ReservationErrorCode.TRAVEL_TIME_UNAVAILABLE, null);
         }
@@ -170,9 +170,15 @@ public class ReservationConfirmService {
             return replayed.get();
         }
         Inquiry inquiry = inquiryAccess.lock(principal, inquiryId);
+        requireBookable(inquiry);
+        // 기다리는 동안 사장님이 영업 시작 시각을 바꿔 그 시각이 더는 후보 간격 위에 없음 - 다른 시간 고르기
+        // (잠그기 전에는 간격 위에 있던 시각이라 잘못 보낸 요청(400)이 아님)
+        if (!slotGrid.offers(owner, startAt)) {
+            throw slotUnavailable(SlotUnavailableReason.OUTSIDE_BUSINESS_HOURS);
+        }
         SlotCheck check;
         try {
-            check = check(inquiry, startAt, precheck.areas().askedOnly(), precheck.travel().askedOnly());
+            check = slotCheck(inquiry, startAt, precheck.areas().askedOnly(), precheck.travel().askedOnly());
         } catch (TravelTimes.NotAskedException | AskedAreas.NotAskedException e) {
             throw slotUnavailable(SlotUnavailableReason.TRAVEL_CONFLICT);
         }
@@ -209,8 +215,8 @@ public class ReservationConfirmService {
         return new Outcome(ReservationConfirmResponse.of(reservation, notifications), true);
     }
 
-    // 잠그기 전·뒤 공통 검사 (명세 5.2 1~3번) - 시간 검사 결과를 돌려주고 판단은 부르는 쪽
-    private SlotCheck check(Inquiry inquiry, Instant startAt, ServiceAreaJudge areas, TravelTimes travel) {
+    // 잠그기 전·뒤 공통 검사 (명세 5.2 1~3번) - 예약을 받을 수 있는 상담인지. DB만 읽음 (지도를 부르지 않음)
+    private void requireBookable(Inquiry inquiry) {
         // 종료 409·업체 이용 불가 403·필수 동의 없음 403
         inquiryAccess.checkWritable(inquiry);
         // 4번 중 활성 예약 - 예약이 잡히면 문의가 BOOKED라 '사장님 응대'보다 먼저 봐야 기존 예약을 보여 줄 수 있음
@@ -223,6 +229,11 @@ public class ReservationConfirmService {
         if (!inquiry.isAiAnswering()) {
             throw new BusinessException(ReservationErrorCode.OWNER_HANDLING);
         }
+    }
+
+    // 잠그기 전·뒤 공통 검사 - 자동 예약 조건과 그 시각. 서비스 지역·이동시간 때문에 지도를 부를 수 있음
+    // 조건이 깨졌으면 AskOwner(사장님 확인으로 넘김), 시간 검사 결과는 돌려주고 판단은 부르는 쪽
+    private SlotCheck slotCheck(Inquiry inquiry, Instant startAt, ServiceAreaJudge areas, TravelTimes travel) {
         Optional<BookingEligibility.Block> block = eligibility.check(inquiry, areas);
         if (block.isPresent()) {
             throw new AskOwner(block.get().code(), block.get().result());
@@ -295,42 +306,6 @@ public class ReservationConfirmService {
             super(code.getCode(), null, false, false);
             this.code = code;
             this.result = result;
-        }
-    }
-
-    // 서비스 지역 답을 기억 - 잠근 뒤에는 기억한 답만 (지도를 부르지 않음)
-    static final class AskedAreas implements ServiceAreaJudge {
-
-        private final ServiceAreaJudge source;
-        private final Map<List<Object>, ServiceAreaMatch> asked = new HashMap<>();
-
-        AskedAreas(ServiceAreaJudge source) {
-            this.source = source;
-        }
-
-        @Override
-        public ServiceAreaMatch match(GeoPoint point, List<String> regionCodes) {
-            return asked.computeIfAbsent(List.of(point, List.copyOf(regionCodes)),
-                    key -> source.match(point, regionCodes));
-        }
-
-        AskedAreas askedOnly() {
-            Map<List<Object>, ServiceAreaMatch> known = Map.copyOf(asked);
-            return new AskedAreas((point, regionCodes) -> {
-                ServiceAreaMatch match = known.get(List.of(point, List.copyOf(regionCodes)));
-                if (match == null) {
-                    throw new NotAskedException();
-                }
-                return match;
-            });
-        }
-
-        // 잠그는 사이 방문 주소나 서비스 지역이 바뀜 - 다시 고르게 함
-        static final class NotAskedException extends RuntimeException {
-
-            NotAskedException() {
-                super("잠그기 전에 확인하지 않은 서비스 지역", null, false, false);
-            }
         }
     }
 }
