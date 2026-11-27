@@ -412,6 +412,8 @@ class AdminPrivacyFlowTest {
                 try {
                     while (!waitingOnCustomerLock && !erasing.isDone() && System.nanoTime() < deadline) {
                         // 이 트랜잭션(첫 삭제)이 끝나기를 기다리는 다른 연결의 조회(select ... for update)가 있는지
+                        // pg_stat_activity는 한 트랜잭션 안에서 처음 읽은 내용을 계속 돌려주므로 볼 때마다 비우고 새로 읽음
+                        jdbc.execute("SELECT pg_stat_clear_snapshot()");
                         waitingOnCustomerLock = jdbc.queryForObject("SELECT count(*) FROM pg_locks l "
                                 + "JOIN pg_stat_activity a ON a.pid = l.pid WHERE NOT l.granted "
                                 + "AND l.locktype = 'transactionid' AND l.transactionid = pg_current_xact_id()::xid "
