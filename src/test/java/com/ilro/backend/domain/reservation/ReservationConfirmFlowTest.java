@@ -46,6 +46,7 @@ import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.hasSize;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -152,7 +153,8 @@ class ReservationConfirmFlowTest {
         assertThat(jdbc.queryForList("SELECT dedupe_key FROM notification WHERE ref_type = 'RESERVATION' "
                 + "AND ref_id = ? ORDER BY id", String.class, reservationId)).containsExactly(
                 "RESERVATION:" + reservationId + ":CONFIRMED:CUSTOMER:SMS",
-                "RESERVATION:" + reservationId + ":CONFIRMED:OWNER:WEB_PUSH");
+                "RESERVATION:" + reservationId + ":CONFIRMED:OWNER:WEB_PUSH",
+                "RESERVATION:" + reservationId + ":CONFIRMED:OWNER:IN_APP");
         assertThat(inquiryStatus(session)).isEqualTo("BOOKED");
         assertThat(inquiryVersion(session)).isEqualTo(versionBefore + 1);
     }
@@ -188,7 +190,7 @@ class ReservationConfirmFlowTest {
                 .andExpect(jsonPath("$.code").value("IDEMPOTENCY_KEY_REUSED"));
         assertThat(reservations()).isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM notification WHERE ref_type = 'RESERVATION' "
-                + "AND ref_id = ?", Integer.class, reservationId)).isEqualTo(2);
+                + "AND ref_id = ?", Integer.class, reservationId)).isEqualTo(3);
     }
 
     @Test
@@ -231,10 +233,61 @@ class ReservationConfirmFlowTest {
         assertThat(reservations()).isZero();
         assertThat(inquiryStatus(session)).isEqualTo("SCHEDULING");
         assertThat(needsCheck(session)).isZero();
+        // 잘못 보낸 시각이면 지도(서비스 지역·이동시간)를 부르지 않음
+        verifyNoInteractions(mapLookup);
+
+        // 자동 예약 조건이 깨진 업체여도 잘못 보낸 시각은 400 - 문의를 사장님 확인으로 넘기지 않음
+        jdbc.update("UPDATE owner SET auto_booking_enabled = false WHERE id = ?", ownerId);
+        int versionBefore = inquiryVersion(session);
+        confirm(session, UUID.randomUUID().toString(), time(monday, "10:07"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_INPUT"));
+        assertThat(inquiryStatus(session)).isEqualTo("SCHEDULING");
+        assertThat(needsCheck(session)).isZero();
+        assertThat(inquiryVersion(session)).isEqualTo(versionBefore);
+        jdbc.update("UPDATE owner SET auto_booking_enabled = true WHERE id = ?", ownerId);
+        // 이미 예약이 있는 문의는 시각이 잘못됐어도 기존 예약 안내(409)가 먼저
+        Session booked = verifiedInquiry();
+        confirm(booked, UUID.randomUUID().toString(), time(monday, "14:00")).andExpect(status().isCreated());
+        confirm(booked, UUID.randomUUID().toString(), time(monday, "10:07"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("RESERVATION_ALREADY_EXISTS"));
 
         // 간격 위의 시각은 그대로 확정
         confirm(session, UUID.randomUUID().toString(), time(monday, "10:30"))
                 .andExpect(status().isCreated());
+    }
+
+    @Test
+    @DisplayName("고른 뒤 영업 시작 시각이 바뀜 - 잠그기 전에는 간격 위였던 시각도 잠근 뒤 다시 봐서 409, 저장 안 함·문의 그대로")
+    void gridMovedWhileWaiting() throws Exception {
+        Session session = verifiedInquiry();
+        // 잠그기 전 검사(서비스 지역 확인) 도중에 사장님이 영업 시작을 09:00 → 09:15로 바꿈 - 10:00은 더는 후보가 아님
+        AtomicBoolean changed = new AtomicBoolean();
+        doAnswer(invocation -> {
+            if (changed.compareAndSet(false, true)) {
+                // 검사는 읽기 전용 트랜잭션 안이라, 사장님의 변경은 다른 스레드(다른 연결)에서 저장
+                ExecutorService other = Executors.newSingleThreadExecutor();
+                try {
+                    other.submit(() -> jdbc.update("UPDATE owner_business_hour SET open_time = '09:15' "
+                            + "WHERE owner_id = ? AND day_of_week = 1", ownerId)).get(30, TimeUnit.SECONDS);
+                } finally {
+                    other.shutdownNow();
+                }
+            }
+            return invocation.callRealMethod();
+        }).when(mapLookup).serviceArea(any(), any());
+
+        confirm(session, UUID.randomUUID().toString(), time(monday, "10:00"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("SLOT_UNAVAILABLE"))
+                .andExpect(jsonPath("$.result.reason").value("OUTSIDE_BUSINESS_HOURS"));
+        assertThat(changed).isTrue();
+        assertThat(reservations()).isZero();
+        assertThat(inquiryStatus(session)).isEqualTo("SCHEDULING");
+        assertThat(needsCheck(session)).isZero();
+        // 바뀐 간격 위의 시각은 확정
+        confirm(session, UUID.randomUUID().toString(), time(monday, "10:15")).andExpect(status().isCreated());
     }
 
     @Test
@@ -496,7 +549,8 @@ class ReservationConfirmFlowTest {
                 .andExpect(jsonPath("$.result.contactPhone").value("0311234567"))
                 .andExpect(jsonPath("$.result.activeChange.status").value("REQUESTED"))
                 .andExpect(jsonPath("$.result.activeChange.requestedBy").value("CUSTOMER"))
-                .andExpect(jsonPath("$.result.activeChange.proposedStartAt").doesNotExist());
+                .andExpect(jsonPath("$.result.activeChange.previous.startAt").value(time(monday, "10:00")))
+                .andExpect(jsonPath("$.result.activeChange.proposed.startAt").doesNotExist());
 
         Session other = verifiedInquiry();
         getAs(other.token(), "/api/v1/customer/reservations/" + reservationId)
@@ -651,7 +705,7 @@ class ReservationConfirmFlowTest {
 
     private int needsCheck(Session session) {
         return jdbc.queryForObject("SELECT count(*) FROM notification WHERE ref_type = 'INQUIRY' AND ref_id = ? "
-                + "AND event_type = 'NEEDS_CHECK'", Integer.class, session.inquiryId());
+                + "AND event_type = 'NEEDS_CHECK' AND channel = 'IN_APP'", Integer.class, session.inquiryId());
     }
 
     private ResultActions getAs(String token, String path) throws Exception {
