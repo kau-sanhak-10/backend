@@ -37,7 +37,7 @@ final class AiResultValidator {
                 || !Objects.equals(result.inputVersion(), request.inputVersion())) {
             return Optional.of("requestId·inquiryId·inputVersion");
         }
-        if (!isOneOf(result.decidedBy(), DecidedBy.class)) {
+        if (DecidedBy.JEV.name().equals(result.decidedBy()) || !isOneOf(result.decidedBy(), DecidedBy.class)) {
             return Optional.of("decidedBy");
         }
         if (result.analyzedPhotoIds() != null && !result.analyzedPhotoIds().isEmpty()) {

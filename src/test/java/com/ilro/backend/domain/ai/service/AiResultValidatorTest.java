@@ -73,6 +73,8 @@ class AiResultValidatorTest {
                 base.workCategory(), base.confidence()))).hasValue("nextAction");
         assertThat(AiResultValidator.violation(REQUEST, with(base, "COMPLETE", "DONE", "LLM", "확인",
                 base.workCategory(), base.confidence()))).hasValue("decidedBy");
+        assertThat(AiResultValidator.violation(REQUEST, with(base, "COMPLETE", "DONE", "JEV", "확인",
+                base.workCategory(), base.confidence()))).hasValue("decidedBy");
         assertThat(AiResultValidator.violation(REQUEST, with(base, "COMPLETE", "DONE", "RULE", " ",
                 base.workCategory(), base.confidence()))).hasValue("reply.content");
         assertThat(AiResultValidator.violation(REQUEST, with(base, "COMPLETE", "DONE", "RULE", "확인",
