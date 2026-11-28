@@ -17,6 +17,7 @@ import java.time.OffsetDateTime;
 // 사장님·운영자 로그인: accessToken·expiresAt·owner/admin
 // 예약 전 번호 확인(CUSTOMER_VERIFY): inquiryId·verifiedAt
 // 상담 복구(INQUIRY_ACCESS)·예약 조회(RESERVATION_LOOKUP): 고객 토큰(cus_) accessToken·expiresAt
+// 운영팀의 사장님 번호 확인(OWNER_SIGNUP): verifiedAt만
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ConfirmVerificationResponse(VerificationPurpose purpose, String accessToken, OffsetDateTime expiresAt,
                                           OwnerLogin owner, AdminLogin admin, Long inquiryId,
@@ -49,5 +50,10 @@ public record ConfirmVerificationResponse(VerificationPurpose purpose, String ac
     public static ConfirmVerificationResponse customerToken(VerificationPurpose purpose, IssuedToken token) {
         return new ConfirmVerificationResponse(purpose, token.token(), KstTime.of(token.expiresAt()), null, null,
                 null, null);
+    }
+
+    // 번호 확인뿐인 인증 (OWNER_SIGNUP) - 토큰 없이 확인 시각만
+    public static ConfirmVerificationResponse phoneConfirmed(VerificationPurpose purpose, Instant verifiedAt) {
+        return new ConfirmVerificationResponse(purpose, null, null, null, null, null, KstTime.of(verifiedAt));
     }
 }

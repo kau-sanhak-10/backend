@@ -32,7 +32,9 @@ public enum AuthErrorCode implements ErrorCode {
     OWNER_RESTRICTED(HttpStatus.FORBIDDEN, "OWNER_RESTRICTED", "이용이 제한된 계정이에요. 운영팀에 문의해 주세요"),
     OWNER_WITHDRAWN(HttpStatus.FORBIDDEN, "OWNER_WITHDRAWN", "탈퇴한 계정이에요"),
     // result: openInquiries, activeReservations - 처리하지 않은 문의(정보 수집·시간 선택·사장님 확인)·확정 예약 수 (BE-16)
-    WITHDRAWAL_BLOCKED(HttpStatus.UNPROCESSABLE_CONTENT, "WITHDRAWAL_BLOCKED", "처리하지 않은 문의나 확정 예약이 남아 있어 탈퇴할 수 없어요");
+    WITHDRAWAL_BLOCKED(HttpStatus.UNPROCESSABLE_CONTENT, "WITHDRAWAL_BLOCKED", "처리하지 않은 문의나 확정 예약이 남아 있어 탈퇴할 수 없어요"),
+    // SUPER 운영자만 쓰는 기능(로그인 번호 변경·접근 기록·삭제)을 STAFF가 부름 (BE-17)
+    ADMIN_ROLE_REQUIRED(HttpStatus.FORBIDDEN, "ADMIN_ROLE_REQUIRED", "이 기능은 최고 운영자만 쓸 수 있습니다");
 
     private final HttpStatus status;
     private final String code;
