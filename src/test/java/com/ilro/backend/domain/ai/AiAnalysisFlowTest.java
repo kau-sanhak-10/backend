@@ -307,10 +307,21 @@ class AiAnalysisFlowTest {
                 .containsEntry("ref_type", "INQUIRY")
                 .containsEntry("channel", "IN_APP")
                 .containsEntry("send_status", "PENDING");
+        // 같은 사건의 사장님 푸시 - 발송기가 보냄 (BE-14)
+        assertThat(jdbc.queryForMap("SELECT owner_id, recipient, event_type, ref_type, ref_id, channel, send_status "
+                + "FROM notification WHERE dedupe_key = ?", "NEEDS_CHECK:INQUIRY:" + session.inquiryId() + ":"
+                + inputVersion + ":WEB_PUSH"))
+                .containsEntry("owner_id", ownerId)
+                .containsEntry("recipient", "OWNER")
+                .containsEntry("event_type", "NEEDS_CHECK")
+                .containsEntry("ref_type", "INQUIRY")
+                .containsEntry("ref_id", session.inquiryId())
+                .containsEntry("channel", "WEB_PUSH")
+                .containsEntry("send_status", "PENDING");
     }
 
     @Test
-    @DisplayName("보완 질문 수 - 적용된 보완 질문의 대상 항목을 세어 다음 요청에 보냄, 대화는 오래된 순")
+    @DisplayName("보완 질문 수 - 항목별 최초 질문은 빼고 세어 다음 요청에 보냄(1번 → 0, 2번 → 1), 대화는 오래된 순")
     void askCounts() throws Exception {
         Session session = startInquiry();
         long first = send(session, "보일러가 안 켜져요");
@@ -329,8 +340,8 @@ class AiAnalysisFlowTest {
         List<AnalyzeRequest> requests = ai.requests();
         assertThat(requests).hasSize(3);
         assertThat(requests.get(0).askCounts()).isEmpty();
-        assertThat(requests.get(1).askCounts()).containsOnly(Map.entry("error_code", 1), Map.entry("model", 1));
-        assertThat(requests.get(2).askCounts()).containsOnly(Map.entry("error_code", 2), Map.entry("model", 1));
+        assertThat(requests.get(1).askCounts()).containsOnly(Map.entry("error_code", 0), Map.entry("model", 0));
+        assertThat(requests.get(2).askCounts()).containsOnly(Map.entry("error_code", 1), Map.entry("model", 0));
         assertThat(requests.get(1).fields()).singleElement().satisfies(field -> {
             assertThat(field.fieldKey()).isEqualTo("symptom");
             assertThat(field.source()).isEqualTo(InquiryFieldSource.CUSTOMER);
@@ -340,6 +351,125 @@ class AiAnalysisFlowTest {
                 .containsExactly(MessageSender.CUSTOMER, MessageSender.AI, MessageSender.CUSTOMER, MessageSender.AI,
                         MessageSender.CUSTOMER);
         assertThat(inquiry(session)).containsEntry("status", "SCHEDULING");
+    }
+
+    @Test
+    @DisplayName("보완 질문 수 - 문자 질문·사진 요청·재촬영 요청을 항목별로 합침 (3번 물었으면 2)")
+    void askCountsSumAllKinds() throws Exception {
+        Session session = startInquiry();
+        send(session, "보일러가 안 켜져요");
+        ai.then(reply(answer("ASK_MORE_INFO", "MISSING_FIELD").targets("model", "error_code")));
+        analysisService.analyze(session.inquiryId());
+        send(session, "모델명은 모르겠어요");
+        ai.then(reply(answer("REQUEST_IMAGE", "MISSING_FIELD").targets("model")));
+        analysisService.analyze(session.inquiryId());
+        send(session, "사진이 흐리게 찍혔어요");
+        ai.then(reply(answer("REQUEST_IMAGE", "MISSING_FIELD").targets("model")));
+        analysisService.analyze(session.inquiryId());
+        // 질문이 아닌 답(다른 질문 답변)은 세지 않음
+        send(session, "출장비는 얼마예요?");
+        ai.then(reply(answer("ANSWER_SIDE_QUESTION", null).targets("model")));
+        analysisService.analyze(session.inquiryId());
+        send(session, "다시 찍어 볼게요");
+        ai.then(reply(answer("CHECK_SCHEDULE", "DONE")));
+        analysisService.analyze(session.inquiryId());
+
+        List<AnalyzeRequest> requests = ai.requests();
+        assertThat(requests).hasSize(5);
+        assertThat(requests.get(0).askCounts()).isEmpty();
+        assertThat(requests.get(1).askCounts()).containsOnly(Map.entry("model", 0), Map.entry("error_code", 0));
+        assertThat(requests.get(2).askCounts()).containsOnly(Map.entry("model", 1), Map.entry("error_code", 0));
+        assertThat(requests.get(3).askCounts()).containsOnly(Map.entry("model", 2), Map.entry("error_code", 0));
+        assertThat(requests.get(4).askCounts()).containsOnly(Map.entry("model", 2), Map.entry("error_code", 0));
+    }
+
+    @Test
+    @DisplayName("보완 질문 수 - 실패·STALE 결과와 같은 결과를 다시 적용한 것으로는 늘지 않음")
+    void askCountsOnlyApplied() throws Exception {
+        Session session = startInquiry();
+        send(session, "보일러가 안 켜져요");
+        // 시간 초과 뒤 성공 - 적용된 질문은 하나
+        ai.then(failure(Outcome.TIMEOUT, true, "AI_MODEL_TIMEOUT"))
+                .then(reply(answer("ASK_MORE_INFO", "MISSING_FIELD").targets("model")));
+        analysisService.analyze(session.inquiryId());
+
+        // 분석 중 새 메시지 - 앞 결과(질문)는 STALE로만 남고 뒤 결과만 적용
+        send(session, "모델명은 모르겠어요");
+        ai.then(request -> {
+            send(session, "스티커가 지워졌어요");
+            return ok(answer("ASK_MORE_INFO", "MISSING_FIELD").targets("model").build(request));
+        }).then(reply(answer("REQUEST_IMAGE", "MISSING_FIELD").targets("model")));
+        analysisService.analyze(session.inquiryId());
+
+        // 같은 요청의 결과를 두 번 적용
+        send(session, "사진은 조금 뒤에 보낼게요");
+        AiAnalysisStore.Snapshot snapshot = store.prepare(session.inquiryId()).orElseThrow();
+        AiCallResult call = ok(answer("REQUEST_IMAGE", "MISSING_FIELD").targets("model").build(snapshot.request()));
+        assertThat(store.apply(snapshot, call)).isEqualTo(AiAnalysisStore.State.DONE);
+        assertThat(store.apply(snapshot, call)).isEqualTo(AiAnalysisStore.State.DONE);
+        send(session, "여기요");
+        AnalyzeRequest next = store.prepare(session.inquiryId()).orElseThrow().request();
+
+        assertThat(decisionStatuses(session)).containsExactly("TIMEOUT", "SUCCESS", "STALE", "SUCCESS", "SUCCESS");
+        List<AnalyzeRequest> requests = ai.requests();
+        assertThat(requests).hasSize(4);
+        assertThat(requests.get(0).askCounts()).isEmpty();
+        assertThat(requests.get(1).askCounts()).isEmpty();
+        assertThat(requests.get(2).askCounts()).containsOnly(Map.entry("model", 0));
+        assertThat(requests.get(3).askCounts()).containsOnly(Map.entry("model", 0));
+        assertThat(snapshot.request().askCounts()).containsOnly(Map.entry("model", 1));
+        assertThat(next.askCounts()).containsOnly(Map.entry("model", 2));
+    }
+
+    @Test
+    @DisplayName("질문 한도 전 - 정보가 확인되면 남은 횟수와 상관없이 바로 방문 시간 고르기로")
+    void proceedBeforeAskLimit() throws Exception {
+        Session session = startInquiry();
+        long first = send(session, "물이 새요");
+        ai.then(reply(answer("ASK_MORE_INFO", "MISSING_FIELD").targets("model").fact("symptom", "누수", first)));
+        analysisService.analyze(session.inquiryId());
+        long second = send(session, "NCB-500이에요");
+        ai.then(reply(answer("CHECK_SCHEDULE", "DONE").fact("model", "NCB-500", second)));
+        analysisService.analyze(session.inquiryId());
+
+        assertThat(ai.requests().getLast().askCounts()).containsOnly(Map.entry("model", 0));
+        assertThat(inquiry(session)).containsEntry("status", "SCHEDULING");
+        assertThat(notifications(session)).isZero();
+        assertThat(fieldStates(session)).containsExactly("model/CONFIRMED/null", "symptom/CONFIRMED/null");
+    }
+
+    @ParameterizedTest(name = "{0} 미확인 → {1} → {2}")
+    @DisplayName("질문 한도 뒤 - 필수 항목이 미해결이면 사장님 확인, 참고 항목만 미확인이면 '미확인'으로 남기고 진행")
+    @CsvSource({
+            "symptom, ESCALATE_TO_OWNER, LOW_CONFIDENCE, OWNER_CHECK, 1",
+            "model, CHECK_SCHEDULE, DONE, SCHEDULING, 0"
+    })
+    void afterAskLimit(String fieldKey, String action, String ruleReason, String expectedStatus,
+                       int expectedNotifications) throws Exception {
+        Session session = startInquiry();
+        long first = send(session, "보일러가 이상해요");
+        Answer firstAsk = answer("ASK_MORE_INFO", "MISSING_FIELD").targets(fieldKey);
+        if (!fieldKey.equals("symptom")) {
+            firstAsk.fact("symptom", "작동 이상", first);
+        }
+        ai.then(reply(firstAsk));
+        analysisService.analyze(session.inquiryId());
+        send(session, "잘 모르겠어요");
+        ai.then(reply(answer("ASK_MORE_INFO", "MISSING_FIELD").targets(fieldKey)));
+        analysisService.analyze(session.inquiryId());
+        send(session, "그것도 모르겠어요");
+        ai.then(reply(answer("REQUEST_IMAGE", "MISSING_FIELD").targets(fieldKey)));
+        analysisService.analyze(session.inquiryId());
+        long last = send(session, "사진을 못 찍겠어요");
+        ai.then(reply(answer(action, ruleReason).fact(new Fact(fieldKey, null, "CUSTOMER", "UNCONFIRMED",
+                "ASK_LIMIT_REACHED", new Evidence(last, null)))));
+        analysisService.analyze(session.inquiryId());
+
+        assertThat(ai.requests()).hasSize(4);
+        assertThat(ai.requests().getLast().askCounts()).containsOnly(Map.entry(fieldKey, 2));
+        assertThat(inquiry(session)).containsEntry("status", expectedStatus);
+        assertThat(notifications(session)).isEqualTo(expectedNotifications);
+        assertThat(fieldStates(session)).contains(fieldKey + "/UNCONFIRMED/ASK_LIMIT_REACHED");
     }
 
     @Test
@@ -553,6 +683,8 @@ class AiAnalysisFlowTest {
         long messageId = send(session, "온수가 나오지 않아요");
         ai.then(reply(answer("CHECK_SCHEDULE", "DONE").fact("symptom", "온수가 나오지 않아요", messageId)));
         analysisService.analyze(session.inquiryId());
+        getAs(session.token(), session.path("")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.nextAction").value("CHECK_SCHEDULE"));
 
         long photoId = uploadedPhoto(session);
         sendWithPhoto(session, "추가 사진을 보냅니다", photoId);
@@ -567,9 +699,36 @@ class AiAnalysisFlowTest {
                 .andExpect(jsonPath("$.result.aiSummary.nextActionReason")
                         .value("이번 AI 분석을 완료하지 못했어요. 고객이 보낸 대화와 사진을 확인해 주세요."))
                 .andExpect(jsonPath("$.result.photos[0].photoId").value(photoId));
+        getAs(session.token(), session.path("")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.status").value("OWNER_CHECK"))
+                .andExpect(jsonPath("$.result.nextAction").value(nullValue()));
         String conversation = getAs(owner, path + "/messages").andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         assertThat(conversation).contains("온수가 나오지 않아요", "추가 사진을 보냅니다");
+    }
+
+    @Test
+    @DisplayName("직접 상담으로 이관하면 기존 예약 안내만 숨기고 상담 원문과 판단 기록은 보존")
+    void directHandoffHidesPriorBookingAction() throws Exception {
+        Session session = startInquiry();
+        long messageId = send(session, "온수가 나오지 않아요");
+        ai.then(reply(answer("CHECK_SCHEDULE", "DONE").fact("symptom", "온수가 나오지 않아요", messageId)));
+        analysisService.analyze(session.inquiryId());
+        getAs(session.token(), session.path("")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.nextAction").value("CHECK_SCHEDULE"));
+        postAs(session.token(), session.path("/handoff-requests"), "").andExpect(status().isCreated());
+        getAs(session.token(), session.path("")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.status").value("OWNER_CHECK"))
+                .andExpect(jsonPath("$.result.nextAction").value(nullValue()));
+        String owner = accounts.ownerToken(ownerId);
+        String path = "/api/v1/owner/inquiries/" + session.inquiryId();
+        getAs(owner, path).andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.aiSummary.nextAction").value(nullValue()))
+                .andExpect(jsonPath("$.result.aiSummary.nextActionReason").value(nullValue()));
+        assertThat(getAs(owner, path + "/messages").andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString()).contains("온수가 나오지 않아요");
+        assertThat(decisionStatuses(session)).containsExactly("SUCCESS");
+        assertThat(notifications(session)).isEqualTo(1);
     }
 
     @Test
@@ -986,6 +1145,13 @@ class AiAnalysisFlowTest {
                 session.inquiryId());
     }
 
+    // 지금 값인 접수 항목 - "항목/상태/미확인 이유" (항목 이름 순)
+    private List<String> fieldStates(Session session) {
+        return jdbc.queryForList("SELECT field_key || '/' || status || '/' || coalesce(unconfirmed_reason, 'null') "
+                + "FROM inquiry_field WHERE inquiry_id = ? AND is_current ORDER BY field_key", String.class,
+                session.inquiryId());
+    }
+
     private int aiMessages(Session session) {
         return jdbc.queryForObject("SELECT count(*) FROM message WHERE inquiry_id = ? AND sender = 'AI'",
                 Integer.class, session.inquiryId());
@@ -993,7 +1159,7 @@ class AiAnalysisFlowTest {
 
     private int notifications(Session session) {
         return jdbc.queryForObject("SELECT count(*) FROM notification WHERE ref_type = 'INQUIRY' AND ref_id = ? "
-                + "AND event_type = 'NEEDS_CHECK'", Integer.class, session.inquiryId());
+                + "AND event_type = 'NEEDS_CHECK' AND channel = 'IN_APP'", Integer.class, session.inquiryId());
     }
 
     private static void sleep(Duration duration) {

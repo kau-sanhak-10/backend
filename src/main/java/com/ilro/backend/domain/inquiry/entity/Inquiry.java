@@ -128,10 +128,14 @@ public class Inquiry extends BaseTimeEntity {
     @Column(length = 20)
     private VisitInfoSource visitInfoSource;
 
+    @Column(length = 64, updatable = false)
+    private String startRequestHash;
+
     @Builder
-    private Inquiry(Owner owner, Customer customer) {
+    private Inquiry(Owner owner, Customer customer, String startRequestHash) {
         this.owner = owner;
         this.customer = customer;
+        this.startRequestHash = startRequestHash;
     }
 
     public boolean isDeleted() {
@@ -194,6 +198,11 @@ public class Inquiry extends BaseTimeEntity {
         this.lng = lng;
         this.accessNote = accessNote;
         this.visitInfoSource = source;
+    }
+
+    // 예약 전 번호 확인 성공 (BE-18) - 방문정보 번호를 바꾸면 updateVisitInfo가 지움
+    public void markPhoneVerified(Instant verifiedAt) {
+        this.phoneVerifiedAt = verifiedAt;
     }
 
     public void changeWorkType(OwnerWorkType workType) {

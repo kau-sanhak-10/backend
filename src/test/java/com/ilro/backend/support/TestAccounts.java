@@ -50,11 +50,22 @@ public class TestAccounts {
         return ownerId;
     }
 
+    // API로 만든 업체(운영팀 등록 등)도 끝나고 지우게 등록
+    public void trackOwner(long ownerId) {
+        ownerIds.add(ownerId);
+    }
+
     public long admin(String phone) {
         long adminId = jdbc.queryForObject(
                 "INSERT INTO admin (name, phone) VALUES ('운영자', ?) RETURNING id", Long.class, phone);
         adminIds.add(adminId);
         return adminId;
+    }
+
+    // 운영자 토큰 - role은 SUPER 또는 STAFF
+    public String adminToken(long adminId, String role) {
+        jdbc.update("UPDATE admin SET role = ? WHERE id = ?", role, adminId);
+        return token("ADMIN", null, adminId, null, null, "CURRENT_TIMESTAMP + interval '1 day'");
     }
 
     // 로그인 흐름 없이 바로 쓰는 사장님 토큰 (원문 반환, DB에는 해시)
@@ -80,6 +91,11 @@ public class TestAccounts {
         for (Long ownerId : ownerIds) {
             jdbc.update("DELETE FROM auth_token WHERE owner_id = ?", ownerId);
             jdbc.update("DELETE FROM phone_verification WHERE target_owner_id = ?", ownerId);
+            // 예약 - 자식 행부터 (변경·이력·작업 메모)
+            String reservations = "(SELECT id FROM reservation WHERE owner_id = ?)";
+            jdbc.update("DELETE FROM reservation_history WHERE reservation_id IN " + reservations, ownerId);
+            jdbc.update("DELETE FROM reservation_change WHERE reservation_id IN " + reservations, ownerId);
+            jdbc.update("DELETE FROM work_note WHERE reservation_id IN " + reservations, ownerId);
             jdbc.update("DELETE FROM reservation WHERE owner_id = ?", ownerId);
             // 고객 상담 - 자식 행부터
             String inquiries = "(SELECT id FROM inquiry WHERE owner_id = ?)";
@@ -97,6 +113,7 @@ public class TestAccounts {
             jdbc.update("DELETE FROM inquiry WHERE owner_id = ?", ownerId);
             jdbc.update("DELETE FROM customer WHERE owner_id = ?", ownerId);
             jdbc.update("DELETE FROM notification WHERE owner_id = ?", ownerId);
+            jdbc.update("DELETE FROM push_subscription WHERE owner_id = ?", ownerId);
             jdbc.update("DELETE FROM owner_block WHERE owner_id = ?", ownerId);
             jdbc.update("DELETE FROM owner_business_hour WHERE owner_id = ?", ownerId);
             jdbc.update("DELETE FROM owner_service_area WHERE owner_id = ?", ownerId);

@@ -18,6 +18,10 @@ public interface PhotoStorage {
     // 보기 주소
     PresignedView presignView(String key, Duration ttl);
 
+    // 파일 삭제 (개인정보 삭제, BE-19) - 이미 없는 파일이어도 오류가 아님 (다시 실행해도 같은 결과)
+    // 실패(권한·통신)는 예외로 올림 - 부르는 쪽이 실패 범위로 기록
+    void delete(String key);
+
     // headers: 브라우저가 업로드할 때 그대로 붙여야 하는 헤더 (Content-Type 등)
     record PresignedUpload(String url, Map<String, String> headers, Instant expiresAt) {
     }

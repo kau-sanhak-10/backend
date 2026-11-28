@@ -48,7 +48,8 @@ public class AuthInterceptor implements HandlerInterceptor {
         return true;
     }
 
-    private static String bearerToken(HttpServletRequest request) {
+    // "Bearer {토큰}"의 토큰 부분 - 헤더가 없거나 Bearer가 아니면 null (앞머리 대소문자는 가리지 않음)
+    public static String bearerToken(HttpServletRequest request) {
         String header = request.getHeader(HttpHeaders.AUTHORIZATION);
         if (header == null || !header.regionMatches(true, 0, BEARER_PREFIX, 0, BEARER_PREFIX.length())) {
             return null;

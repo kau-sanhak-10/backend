@@ -4,6 +4,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Profile;
@@ -19,6 +20,8 @@ public class LocalPhotoStorage implements PhotoStorage {
     private static final String BASE_URL = "http://localhost/local-photo-storage/";
 
     private final Map<String, StoredFile> files = new ConcurrentHashMap<>();
+    // 다음 삭제를 한 번 실패시킬 키 (테스트용)
+    private final Set<String> failingDeletes = ConcurrentHashMap.newKeySet();
     private final Clock clock;
 
     @Override
@@ -36,8 +39,21 @@ public class LocalPhotoStorage implements PhotoStorage {
         return new PresignedView(BASE_URL + key, clock.instant().plus(ttl));
     }
 
+    @Override
+    public void delete(String key) {
+        if (failingDeletes.remove(key)) {
+            throw new IllegalStateException("local photo storage delete failed (test)");
+        }
+        files.remove(key);
+    }
+
     // 테스트에서 "브라우저가 저장소에 올렸다"를 흉내
     public void putForTest(String key, long sizeBytes, String contentType) {
         files.put(key, new StoredFile(sizeBytes, contentType));
+    }
+
+    // 테스트에서 이 키의 다음 삭제를 한 번 실패시킴 (개인정보 삭제의 부분 실패 확인용)
+    public void failDeleteOnceForTest(String key) {
+        failingDeletes.add(key);
     }
 }

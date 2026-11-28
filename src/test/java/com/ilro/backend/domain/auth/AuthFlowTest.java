@@ -29,6 +29,13 @@ import org.springframework.web.context.WebApplicationContext;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.allOf;
@@ -317,6 +324,48 @@ class AuthFlowTest {
     }
 
     @Test
+    @DisplayName("IP 한도 경계 - 같은 IP에서 번호만 바꿔 동시에 보내도 한도(30)까지만 문자가 나간다")
+    void ipHourlyLimitUnderConcurrency() throws Exception {
+        for (int i = 0; i < 29; i++) {
+            seedSend(accounts.newPhone(), ip, Duration.ofMinutes(55 - i), false);
+        }
+        List<String> phones = new ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            String phone = accounts.newPhone();
+            accounts.approvedOwner(phone);
+            phones.add(phone);
+        }
+
+        ExecutorService pool = Executors.newFixedThreadPool(phones.size());
+        List<Integer> statuses = new ArrayList<>();
+        try {
+            CountDownLatch ready = new CountDownLatch(phones.size());
+            CountDownLatch go = new CountDownLatch(1);
+            List<Future<Integer>> futures = new ArrayList<>();
+            for (String phone : phones) {
+                futures.add(pool.submit(() -> {
+                    ready.countDown();
+                    go.await();
+                    return sendCode("OWNER_LOGIN", phone).andReturn().getResponse().getStatus();
+                }));
+            }
+            ready.await();
+            go.countDown();
+            for (Future<Integer> future : futures) {
+                statuses.add(future.get(30, TimeUnit.SECONDS));
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        // 남은 한 자리만 통과 - 나머지는 앞 요청이 끝난 뒤 다시 세어 429
+        assertThat(statuses).containsExactlyInAnyOrder(201, 429, 429, 429);
+        assertThat(phones.stream().filter(smsSender::hasSentTo).count()).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM phone_verification WHERE request_ip = ? "
+                + "AND created_at > CURRENT_TIMESTAMP - interval '1 hour'", Integer.class, ip)).isEqualTo(30);
+    }
+
+    @Test
     @DisplayName("문자 발송 실패는 502, 실패 기록은 남고 그 인증으로는 확인할 수 없다")
     void sendFailure() throws Exception {
         String phone = accounts.newPhone();
@@ -374,12 +423,14 @@ class AuthFlowTest {
     }
 
     @Test
-    @DisplayName("아직 없는 인증 목적·모르는 목적 값·6자리가 아닌 번호는 400")
+    @DisplayName("모르는 목적 값·6자리가 아닌 번호는 400, 운영자 토큰 없는 사장님 번호 확인(OWNER_SIGNUP)은 문자 없이 401")
     void unsupportedInputs() throws Exception {
-        sendCode("CUSTOMER_VERIFY", accounts.newPhone())
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("INVALID_INPUT"))
-                .andExpect(jsonPath("$.result[0].field").value("purpose"));
+        // 운영자만 보낼 수 있음 (BE-17) - 운영자 토큰으로 보내는 흐름은 AdminOwnerFlowTest
+        String signupPhone = accounts.newPhone();
+        sendCode("OWNER_SIGNUP", signupPhone)
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+        assertThat(smsSender.hasSentTo(signupPhone)).isFalse();
         sendCode("SUPER_LOGIN", accounts.newPhone())
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("INVALID_INPUT"));

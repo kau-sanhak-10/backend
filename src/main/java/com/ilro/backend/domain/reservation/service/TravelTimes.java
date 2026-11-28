@@ -28,4 +28,25 @@ public final class TravelTimes {
     public OptionalInt minutes(GeoPoint from, GeoPoint to) {
         return asked.computeIfAbsent(List.of(from, to), key -> source.minutes(from, to));
     }
+
+    // 이 요청에서 이미 물은 구간만 답하는 사본 - 업체를 잠근 뒤에는 지도를 부르지 않음 (명세 1.7, BE-11)
+    // 잠그기 전 검사 때 없던 구간을 물으면(그사이 앞뒤 방문지가 바뀜) NotAskedException
+    public TravelTimes askedOnly() {
+        Map<List<GeoPoint>, OptionalInt> known = Map.copyOf(asked);
+        return new TravelTimes((from, to) -> {
+            OptionalInt minutes = known.get(List.of(from, to));
+            if (minutes == null) {
+                throw new NotAskedException();
+            }
+            return minutes;
+        });
+    }
+
+    // 잠근 뒤 처음 보는 구간 - 부르는 쪽이 409 SLOT_UNAVAILABLE(TRAVEL_CONFLICT)로 바꿔 다시 고르게 함
+    public static class NotAskedException extends RuntimeException {
+
+        public NotAskedException() {
+            super("잠그기 전에 확인하지 않은 이동 구간", null, false, false);
+        }
+    }
 }

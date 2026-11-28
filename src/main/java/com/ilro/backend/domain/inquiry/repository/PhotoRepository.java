@@ -12,6 +12,8 @@ import java.util.List;
 
 public interface PhotoRepository extends JpaRepository<Photo, Long> {
 
+    boolean existsByInquiryId(Long inquiryId);
+
     List<Photo> findByInquiryIdAndIdIn(Long inquiryId, Collection<Long> ids);
 
     List<Photo> findByMessageIdInOrderByIdAsc(Collection<Long> messageIds);

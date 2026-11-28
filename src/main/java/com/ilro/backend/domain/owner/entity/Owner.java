@@ -116,12 +116,17 @@ public class Owner extends BaseTimeEntity {
     // REJECTED일 때 필수
     private String rejectionReason;
 
+    // 운영팀 등록(B-01)은 대표 연락처·주소·서비스 문구까지 받음 - 좌표는 사장님이 업체 정보(B-05)에서 채움
     @Builder
-    private Owner(String businessName, String ownerName, String phone, String linkToken) {
+    private Owner(String businessName, String ownerName, String phone, String linkToken, String contactPhone,
+                  String address, String serviceDescription) {
         this.businessName = businessName;
         this.ownerName = ownerName;
         this.phone = phone;
         this.linkToken = linkToken;
+        this.contactPhone = contactPhone;
+        this.address = address;
+        this.serviceDescription = serviceDescription;
     }
 
     // 대표자 이름 (B-03) - 로그인 번호는 운영팀만 바꿈 (O-03)
@@ -151,6 +156,12 @@ public class Owner extends BaseTimeEntity {
         this.travelMode = travelMode;
     }
 
+    // 사장님 탈퇴 (B-04, BE-16) - 고객 예약·문의 기록은 그대로, 로그인·접수 링크·자동 예약은 막힘
+    public void withdraw() {
+        this.status = OwnerStatus.WITHDRAWN;
+        this.autoBookingEnabled = false;
+    }
+
     public void changeAutoBooking(boolean enabled) {
         this.autoBookingEnabled = enabled;
     }
@@ -158,6 +169,11 @@ public class Owner extends BaseTimeEntity {
     // 신규 접수 중지·재개 (B-09)
     public void changeIntakePaused(boolean paused) {
         this.intakePaused = paused;
+    }
+
+    // 알림 유형별 푸시 수신 여부 (B-27, BE-14) - 4개 유형을 JSON으로 통째로 바꿈
+    public void changeNotifySettings(String notifySettings) {
+        this.notifySettings = notifySettings;
     }
 
     public boolean hasStartAddress() {
@@ -177,5 +193,33 @@ public class Owner extends BaseTimeEntity {
     // 접수 링크 발급·재발급 (O-04) - 토큰을 바꾸면 기존 링크는 폐기됨
     public void changeLinkToken(String linkToken) {
         this.linkToken = linkToken;
+    }
+
+    // ---------- 운영팀 (명세 5.8, BE-17) - 아래 네 가지는 서로 독립: 하나가 바뀌어도 다른 것을 켜지 않음 ----------
+
+    // 신청 심사 - 승인. 운영 상태(READY)·자동 예약(꺼짐)은 그대로
+    public void approve(Admin reviewer, Instant now) {
+        this.approvalStatus = ApprovalStatus.APPROVED;
+        this.rejectionReason = null;
+        this.reviewedBy = reviewer;
+        this.reviewedAt = now;
+    }
+
+    // 신청 심사 - 거절 (사유 필수, ck_owner_rejection_reason)
+    public void reject(Admin reviewer, String reason, Instant now) {
+        this.approvalStatus = ApprovalStatus.REJECTED;
+        this.rejectionReason = reason;
+        this.reviewedBy = reviewer;
+        this.reviewedAt = now;
+    }
+
+    // 운영 상태 READY·ACTIVE·RESTRICTED - 예약·문의·고객은 건드리지 않음
+    public void changeStatus(OwnerStatus status) {
+        this.status = status;
+    }
+
+    // 로그인 번호 변경 (O-03) - 번호만 바꾸고 업체·예약·고객은 그대로
+    public void changeLoginPhone(String phone) {
+        this.phone = phone;
     }
 }

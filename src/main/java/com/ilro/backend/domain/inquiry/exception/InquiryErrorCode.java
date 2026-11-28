@@ -18,6 +18,7 @@ public enum InquiryErrorCode implements ErrorCode {
     OWNER_UNAVAILABLE(HttpStatus.FORBIDDEN, "OWNER_UNAVAILABLE", "지금은 이 업체에 상담을 받을 수 없어요"),
     // result: requiredConsents
     CONSENT_REQUIRED(HttpStatus.FORBIDDEN, "CONSENT_REQUIRED", "필수 동의가 필요해요"),
+    INQUIRY_START_RETRY_UNAVAILABLE(HttpStatus.CONFLICT, "INQUIRY_START_RETRY_UNAVAILABLE", "기존 문의를 시작 화면에서 다시 열 수 없어요"),
     // 없거나 접근 범위 밖의 문의 - 다른 업체 문의도 있다는 사실을 숨기고 404
     INQUIRY_NOT_FOUND(HttpStatus.NOT_FOUND, "INQUIRY_NOT_FOUND", "문의를 찾을 수 없습니다"),
     INQUIRY_CLOSED(HttpStatus.CONFLICT, "INQUIRY_CLOSED", "종료된 상담이에요"),

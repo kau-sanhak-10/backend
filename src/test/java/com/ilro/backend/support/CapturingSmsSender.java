@@ -35,6 +35,11 @@ public class CapturingSmsSender implements SmsSender {
         return matcher.find() ? matcher.group() : null;
     }
 
+    // 그 번호로 마지막에 보낸 문자 전체 - 알림 문안 확인용 (BE-14)
+    public String lastMessage(String phone) {
+        return lastMessages.get(phone);
+    }
+
     public boolean hasSentTo(String phone) {
         return lastMessages.containsKey(phone);
     }

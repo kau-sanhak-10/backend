@@ -6,6 +6,7 @@ import com.ilro.backend.domain.auth.dto.SendVerificationRequest;
 import com.ilro.backend.domain.auth.dto.SendVerificationResponse;
 import com.ilro.backend.domain.auth.service.AuthTokenService;
 import com.ilro.backend.domain.auth.service.VerificationService;
+import com.ilro.backend.global.auth.AuthInterceptor;
 import com.ilro.backend.global.auth.AuthPrincipal;
 import com.ilro.backend.global.common.response.ApiResponse;
 import jakarta.servlet.http.HttpServletRequest;
@@ -19,7 +20,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-// 인증 (명세 4.1) - B-02 사장님 로그인·O-01 운영자 로그인
+// 인증 (명세 4.1) - B-02 사장님 로그인·O-01 운영자 로그인·C-03 상담 복구·C-13 예약 전 번호 확인·C-14 예약 조회
 @RestController
 @RequestMapping("/api/v1/auth")
 @RequiredArgsConstructor
@@ -29,10 +30,12 @@ public class AuthController {
     private final AuthTokenService authTokenService;
 
     // 인증번호 발송 - 요청 IP는 누적 발송 제한에 씀 (프록시 뒤면 server.forward-headers-strategy로 실제 IP)
+    // 공개 경로라 인터셉터가 없음 - 예약 전 번호 확인(CUSTOMER_VERIFY)은 서비스가 헤더의 문의 토큰을 직접 확인
     @PostMapping("/verifications")
     public ResponseEntity<ApiResponse<SendVerificationResponse>> sendVerification(
             @Valid @RequestBody SendVerificationRequest request, HttpServletRequest httpRequest) {
-        SendVerificationResponse response = verificationService.send(request, httpRequest.getRemoteAddr());
+        SendVerificationResponse response = verificationService.send(request, httpRequest.getRemoteAddr(),
+                AuthInterceptor.bearerToken(httpRequest));
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.onSuccess(response));
     }
 
