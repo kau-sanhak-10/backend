@@ -3,6 +3,7 @@ package com.ilro.backend.domain.reservation.service;
 import com.ilro.backend.domain.reservation.exception.MapUnavailableException;
 import com.ilro.backend.infra.map.GeoPoint;
 import com.ilro.backend.infra.map.MapClient;
+import com.ilro.backend.infra.map.MapClient.TravelEstimate;
 import com.ilro.backend.infra.map.ServiceAreaMatch;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -14,6 +15,7 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalInt;
 
 // 지도 조회 (BE-10) - 이동시간·서비스 지역을 지도(MapClient)에 묻는 곳은 여기 한 곳
@@ -38,14 +40,14 @@ public class MapLookup {
     private record Route(GeoPoint from, GeoPoint to) {
     }
 
-    // mapFailed면 minutes는 쓰지 않음
-    private record Cached(OptionalInt minutes, boolean mapFailed, Instant expiresAt) {
+    // mapFailed면 estimate는 쓰지 않음
+    private record Cached(Optional<TravelEstimate> estimate, boolean mapFailed, Instant expiresAt) {
 
-        OptionalInt answer() {
+        Optional<TravelEstimate> answer() {
             if (mapFailed) {
                 throw new MapUnavailableException();
             }
-            return minutes;
+            return estimate;
         }
     }
 
@@ -69,7 +71,7 @@ public class MapLookup {
     // 한 요청(후보 계산·시간 검사 한 번) 동안 쓸 이동시간 - 그 요청 안에서 같은 구간은 같은 값
     // 지도 장애면 MapUnavailableException (고객 후보·예약 시간 검사는 503으로 끝남)
     public TravelTimes newRequest() {
-        return new TravelTimes(this::travelMinutes);
+        return new TravelTimes(this::travel);
     }
 
     // 보여 주기만 하는 요청(사장님 일정 B-28)용 - 지도 장애도 '모름'으로 보여 줌
@@ -77,9 +79,9 @@ public class MapLookup {
     public TravelTimes newDisplayRequest() {
         return new TravelTimes((from, to) -> {
             try {
-                return travelMinutes(from, to);
+                return travel(from, to);
             } catch (MapUnavailableException e) {
-                return OptionalInt.empty();
+                return Optional.empty();
             }
         });
     }
@@ -87,8 +89,12 @@ public class MapLookup {
     // 자동차 이동시간(분) - 같은 곳이면 지도에 묻지 않고 0분, 지도가 셀 수 없다고 하면 빈 값
     // 지도 장애면 MapUnavailableException (기억한 장애도 같음)
     public OptionalInt travelMinutes(GeoPoint from, GeoPoint to) {
+        return travel(from, to).stream().mapToInt(TravelEstimate::minutes).findFirst();
+    }
+
+    private Optional<TravelEstimate> travel(GeoPoint from, GeoPoint to) {
         if (from.equals(to)) {
-            return OptionalInt.of(0);
+            return Optional.of(new TravelEstimate(0, 0));
         }
         Route route = new Route(from, to);
         Instant now = clock.instant();
@@ -133,12 +139,12 @@ public class MapLookup {
     // 로그에 좌표를 남기지 않음 (고객 방문 위치)
     private Cached askTravel(GeoPoint from, GeoPoint to, Instant now) {
         try {
-            OptionalInt minutes = mapClient.carTravelMinutes(from, to);
-            if (minutes == null || (minutes.isPresent() && minutes.getAsInt() < 0)) {
-                log.warn("지도 이동시간 값이 약속(0 이상 분, 모르면 빈 값)과 달라 지도 장애로 처리: {}", minutes);
+            Optional<TravelEstimate> estimate = mapClient.carTravel(from, to);
+            if (estimate == null || (estimate.isPresent() && estimate.get().minutes() < 0)) {
+                log.warn("지도 이동시간 값이 약속(0 이상 분, 모르면 빈 값)과 달라 지도 장애로 처리: {}", estimate);
                 return failed(now);
             }
-            return new Cached(minutes, false, now.plus(minutes.isPresent() ? travelTtl : failureTtl));
+            return new Cached(estimate, false, now.plus(estimate.isPresent() ? travelTtl : failureTtl));
         } catch (RuntimeException e) {
             log.warn("지도 이동시간 조회 실패 - 지도 장애로 처리: {}", e.getClass().getSimpleName());
             return failed(now);
@@ -146,6 +152,6 @@ public class MapLookup {
     }
 
     private Cached failed(Instant now) {
-        return new Cached(OptionalInt.empty(), true, now.plus(failureTtl));
+        return new Cached(Optional.empty(), true, now.plus(failureTtl));
     }
 }

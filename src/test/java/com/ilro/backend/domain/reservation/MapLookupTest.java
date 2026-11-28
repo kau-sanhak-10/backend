@@ -5,6 +5,7 @@ import com.ilro.backend.domain.reservation.service.MapLookup;
 import com.ilro.backend.domain.reservation.service.TravelTimes;
 import com.ilro.backend.infra.map.GeoPoint;
 import com.ilro.backend.infra.map.MapClient;
+import com.ilro.backend.infra.map.MapClient.TravelEstimate;
 import com.ilro.backend.infra.map.ServiceAreaMatch;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -19,7 +20,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.OptionalInt;
+import java.util.Optional;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -51,16 +52,16 @@ class MapLookupTest {
     };
 
     // 구간별 지도 응답 - 정하지 않은 구간은 20분
-    private final Map<List<GeoPoint>, Supplier<OptionalInt>> answers = new HashMap<>();
+    private final Map<List<GeoPoint>, Supplier<Optional<TravelEstimate>>> answers = new HashMap<>();
     private final List<List<GeoPoint>> asked = new ArrayList<>();
     private ServiceAreaMatch area = ServiceAreaMatch.INSIDE;
     private RuntimeException areaError;
 
     private final MapClient map = new MapClient() {
         @Override
-        public OptionalInt carTravelMinutes(GeoPoint from, GeoPoint to) {
+        public Optional<TravelEstimate> carTravel(GeoPoint from, GeoPoint to) {
             asked.add(List.of(from, to));
-            return answers.getOrDefault(List.of(from, to), () -> OptionalInt.of(20)).get();
+            return answers.getOrDefault(List.of(from, to), () -> Optional.of(new TravelEstimate(20, 2400))).get();
         }
 
         @Override
@@ -78,7 +79,7 @@ class MapLookupTest {
         MapLookup lookup = lookup(100);
 
         assertThat(lookup.newRequest().minutes(A, B)).hasValue(20);
-        assertThat(lookup.newRequest().minutes(A, B)).hasValue(20);
+        assertThat(lookup.newDisplayRequest().estimate(A, B)).contains(new TravelEstimate(20, 2400));
         assertThat(lookup.travelMinutes(B, A)).hasValue(20);
         assertThat(lookup.travelMinutes(A, point("37.6000000", "126.8000000"))).as("끝자리 0만 다른 같은 곳").hasValue(0);
         assertThat(asked).containsExactly(List.of(A, B), List.of(B, A));
@@ -103,14 +104,14 @@ class MapLookupTest {
     @DisplayName("지도가 셀 수 없다고 답하면 모름 - 0분으로 바꾸지 않고, 1분만 기억한 뒤 다시 물음")
     void cannotComputeIsUnknown() {
         MapLookup lookup = lookup(100);
-        answers.put(List.of(A, B), OptionalInt::empty);
+        answers.put(List.of(A, B), Optional::empty);
 
         assertThat(lookup.travelMinutes(A, B)).isEmpty();
         now = now.plusSeconds(59);
         assertThat(lookup.travelMinutes(A, B)).isEmpty();
         assertThat(asked).as("1분 안에는 다시 묻지 않음").hasSize(1);
 
-        answers.put(List.of(A, B), () -> OptionalInt.of(15));
+        answers.put(List.of(A, B), () -> Optional.of(new TravelEstimate(15, null)));
         now = now.plusSeconds(1);
         assertThat(lookup.travelMinutes(A, B)).hasValue(15);
         assertThat(asked).hasSize(2);
@@ -123,7 +124,7 @@ class MapLookupTest {
         answers.put(List.of(A, B), () -> {
             throw new IllegalStateException("지도 응답 시간 초과");
         });
-        answers.put(List.of(B, C), () -> OptionalInt.of(-5));
+        answers.put(List.of(B, C), () -> Optional.of(new TravelEstimate(-5, null)));
         answers.put(List.of(C, A), () -> null);
 
         assertThatThrownBy(() -> lookup.travelMinutes(A, B)).isInstanceOf(MapUnavailableException.class);
@@ -134,7 +135,7 @@ class MapLookupTest {
                 .isInstanceOf(MapUnavailableException.class);
         assertThat(asked).as("1분 안에는 다시 묻지 않음").hasSize(3);
 
-        answers.put(List.of(A, B), () -> OptionalInt.of(15));
+        answers.put(List.of(A, B), () -> Optional.of(new TravelEstimate(15, null)));
         now = now.plusSeconds(1);
         assertThat(lookup.travelMinutes(A, B)).as("지도가 돌아오면 바로 반영").hasValue(15);
         assertThat(asked).hasSize(4);
@@ -163,10 +164,11 @@ class MapLookupTest {
         request.minutes(A, B);
 
         now = now.plus(Duration.ofHours(7));
-        answers.put(List.of(A, B), () -> OptionalInt.of(40));
-        assertThat(request.minutes(A, B)).hasValue(20);
+        answers.put(List.of(A, B), () -> Optional.of(new TravelEstimate(40, 5100)));
+        assertThat(request.estimate(A, B)).contains(new TravelEstimate(20, 2400));
         assertThat(asked).hasSize(1);
-        assertThat(lookup.newRequest().minutes(A, B)).as("다음 요청은 새 값").hasValue(40);
+        assertThat(lookup.newRequest().estimate(A, B)).as("다음 요청은 새 값")
+                .contains(new TravelEstimate(40, 5100));
     }
 
     @Test

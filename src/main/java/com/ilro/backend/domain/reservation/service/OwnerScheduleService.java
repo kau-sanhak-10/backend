@@ -106,7 +106,7 @@ public class OwnerScheduleService {
                 reservation.getInquiry() == null ? null : reservation.getInquiry().getId(),
                 customer == null ? null : customer.getName(), customer == null ? null : customer.getPhone(),
                 reservation.getAddress(), planned.previousReservationId(), planned.travelMinutes(),
-                planned.bufferMinutes(), planned.slackMinutes(), planned.travelStatus(),
+                planned.travelDistanceMeters(), planned.bufferMinutes(), planned.slackMinutes(), planned.travelStatus(),
                 change == null ? null : new OwnerScheduleResponse.ActiveChange(change.getId(), change.getStatus(),
                         change.getRequestedBy(), KstTime.of(change.getExpiresAt())));
     }

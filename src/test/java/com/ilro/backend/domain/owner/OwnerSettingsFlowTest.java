@@ -150,6 +150,7 @@ class OwnerSettingsFlowTest {
                               {"workCategory":"INSPECTION","isActive":true}]}""")
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.result.workTypes[0].isActive").value(true))
+                .andExpect(jsonPath("$.result.workTypes[0].workTypeId").isNumber())
                 .andExpect(jsonPath("$.result.workTypes[0].durationMinutes").value(60))
                 .andExpect(jsonPath("$.result.workTypes[0].autoBookingAllowed").value(false))
                 .andExpect(jsonPath("$.result.workTypes[1].durationMinutes").value(90))

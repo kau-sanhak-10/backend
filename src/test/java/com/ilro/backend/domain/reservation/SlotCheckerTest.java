@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalInt;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -41,9 +42,10 @@ class SlotCheckerTest {
     private final List<List<GeoPoint>> asked = new ArrayList<>();
     private final MapClient map = new MapClient() {
         @Override
-        public OptionalInt carTravelMinutes(GeoPoint from, GeoPoint to) {
+        public Optional<TravelEstimate> carTravel(GeoPoint from, GeoPoint to) {
             asked.add(List.of(from, to));
-            return minutes.getOrDefault(List.of(from, to), OptionalInt.of(20));
+            return minutes.getOrDefault(List.of(from, to), OptionalInt.of(20))
+                    .stream().mapToObj(value -> new TravelEstimate(value, null)).findFirst();
         }
 
         @Override
@@ -149,7 +151,7 @@ class SlotCheckerTest {
         assertThat(first.isAvailable()).isTrue();
         assertThat(first.travelMinutes()).isNull();
 
-        TravelTimes travel = new TravelTimes(map::carTravelMinutes);
+        TravelTimes travel = new TravelTimes(map::carTravel);
         ScheduleDay withOrigin = day(null, ORIGIN, List.of(), List.of());
         SlotChecker.check(withOrigin, at(10, 0), 60, CUSTOMER, NOW, travel);
         SlotChecker.check(withOrigin, at(14, 0), 60, CUSTOMER, NOW, travel);
@@ -176,7 +178,7 @@ class SlotCheckerTest {
     @Test
     @DisplayName("방문 주소 좌표를 모르면 앞뒤 이동을 봐야 할 때 이동시간 모름, 셀 곳이 없으면 가능 (지도에 묻지 않음)")
     void unknownDestination() {
-        TravelTimes travel = new TravelTimes(map::carTravelMinutes);
+        TravelTimes travel = new TravelTimes(map::carTravel);
         SlotCheck fromOrigin = SlotChecker.check(day(null, ORIGIN, List.of(), List.of()), at(10, 0), 60, null, NOW,
                 travel);
         assertThat(fromOrigin.travelUnknown()).isTrue();
@@ -203,7 +205,7 @@ class SlotCheckerTest {
     }
 
     private SlotCheck check(ScheduleDay day, int hour, int minute, Instant now) {
-        return SlotChecker.check(day, at(hour, minute), 60, CUSTOMER, now, new TravelTimes(map::carTravelMinutes));
+        return SlotChecker.check(day, at(hour, minute), 60, CUSTOMER, now, new TravelTimes(map::carTravel));
     }
 
     private static Instant at(int hour, int minute) {

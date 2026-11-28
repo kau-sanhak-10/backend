@@ -3,6 +3,7 @@ package com.ilro.backend.domain.reservation.service;
 import com.ilro.backend.domain.reservation.service.ScheduleDay.Visit;
 import com.ilro.backend.global.common.util.KstTime;
 import com.ilro.backend.infra.map.GeoPoint;
+import com.ilro.backend.infra.map.MapClient.TravelEstimate;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -10,7 +11,6 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.OptionalInt;
 
 // 하루 일정 계산 (BE-10, B-28) - 방문마다 앞 방문지(그날 첫 방문은 업체 출발지)에서 오는 이동시간,
 // 앞 방문과 사이의 여유시간, 작업시간을 나눠서 셈 (사장님 일정 조회 B-17이 그대로 보여 줌)
@@ -36,11 +36,12 @@ public final class VisitTimeline {
     // previousReservationId: 앞 방문 (그날 첫 방문이면 null - 출발지에서 옴)
     // workMinutes: 시작~끝 (예약에 잡힌 작업시간)
     // travelMinutes: 앞 방문지·출발지에서 오는 자동차 이동시간 (모르거나 셀 곳이 없으면 null)
+    // travelDistanceMeters: 같은 경로에서 얻은 도로 거리 (모르면 null)
     // bufferMinutes: 앞 방문과 사이에 두는 여유시간 (첫 방문은 null - 출발 시각은 사장님이 정함)
     // slackMinutes: 시작 - (앞 방문 끝 + 여유시간 + 이동시간), 음수면 모자람
     //   (첫 방문·이동시간 모름이면 null, 이동시간을 몰라도 여유시간만으로 모자라면 그 값)
     public record PlannedVisit(Long reservationId, Instant startAt, Instant endAt, int workMinutes,
-                               Long previousReservationId, Integer travelMinutes, Integer bufferMinutes,
+                               Long previousReservationId, Integer travelMinutes, Integer travelDistanceMeters, Integer bufferMinutes,
                                Integer slackMinutes, TravelStatus travelStatus) {
 
         // 사장님이 확인해야 하는 방문 - 이동이 빠듯하거나 이동시간을 모름
@@ -79,29 +80,29 @@ public final class VisitTimeline {
         if (day.origin() == null) {
             return planned(visit, null, null, null, null, TravelStatus.NO_ORIGIN);
         }
-        OptionalInt minutes = minutes(travel, day.origin(), visit.location());
-        if (minutes.isEmpty()) {
+        TravelEstimate estimate = estimate(travel, day.origin(), visit.location());
+        if (estimate == null) {
             return planned(visit, null, null, null, null, TravelStatus.UNKNOWN);
         }
-        return planned(visit, null, minutes.getAsInt(), null, null, TravelStatus.OK);
+        return planned(visit, null, estimate, null, null, TravelStatus.OK);
     }
 
     private static PlannedVisit after(ScheduleDay day, Visit previous, Visit visit, TravelTimes travel) {
         int buffer = day.bufferMinutes();
-        OptionalInt minutes = minutes(travel, previous.location(), visit.location());
-        if (minutes.isEmpty()) {
+        TravelEstimate estimate = estimate(travel, previous.location(), visit.location());
+        if (estimate == null) {
             int slack = slack(previous, visit, buffer);
             return slack < 0
                     ? planned(visit, previous.reservationId(), null, buffer, slack, TravelStatus.CONFLICT)
                     : planned(visit, previous.reservationId(), null, buffer, null, TravelStatus.UNKNOWN);
         }
-        int slack = slack(previous, visit, buffer + minutes.getAsInt());
-        return planned(visit, previous.reservationId(), minutes.getAsInt(), buffer, slack,
+        int slack = slack(previous, visit, buffer + estimate.minutes());
+        return planned(visit, previous.reservationId(), estimate, buffer, slack,
                 slack < 0 ? TravelStatus.CONFLICT : TravelStatus.OK);
     }
 
-    private static OptionalInt minutes(TravelTimes travel, GeoPoint from, GeoPoint to) {
-        return from == null || to == null ? OptionalInt.empty() : travel.minutes(from, to);
+    private static TravelEstimate estimate(TravelTimes travel, GeoPoint from, GeoPoint to) {
+        return from == null || to == null ? null : travel.estimate(from, to).orElse(null);
     }
 
     // 앞 방문 끝 + gapMinutes에 도착했을 때 시작까지 남는 분 (모자라면 음수, 1초라도 모자라면 -1분)
@@ -110,10 +111,11 @@ public final class VisitTimeline {
         return (int) Math.floorDiv(Duration.between(arrival, visit.startAt()).getSeconds(), 60);
     }
 
-    private static PlannedVisit planned(Visit visit, Long previousId, Integer travelMinutes, Integer bufferMinutes,
+    private static PlannedVisit planned(Visit visit, Long previousId, TravelEstimate estimate, Integer bufferMinutes,
                                         Integer slackMinutes, TravelStatus status) {
         int work = (int) Duration.between(visit.startAt(), visit.endAt()).toMinutes();
         return new PlannedVisit(visit.reservationId(), visit.startAt(), visit.endAt(), work, previousId,
-                travelMinutes, bufferMinutes, slackMinutes, status);
+                estimate == null ? null : estimate.minutes(), estimate == null ? null : estimate.distanceMeters(),
+                bufferMinutes, slackMinutes, status);
     }
 }

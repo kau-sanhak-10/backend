@@ -1,6 +1,7 @@
 package com.ilro.backend.domain.owner.dto;
 
 import com.ilro.backend.domain.owner.entity.WorkCategory;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.NotNull;
@@ -21,6 +22,7 @@ public record WorkTypeSettings(
             @NotNull(message = "필수 값입니다") Boolean isActive,
             @Positive(message = "1분 이상이어야 합니다") @Max(value = 1440, message = "1440분 이하여야 합니다")
             Integer durationMinutes,
-            Boolean autoBookingAllowed) {
+            Boolean autoBookingAllowed,
+            @JsonProperty(access = JsonProperty.Access.READ_ONLY) Long workTypeId) {
     }
 }

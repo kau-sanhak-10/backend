@@ -23,12 +23,13 @@ public record OwnerScheduleResponse(LocalDate from, LocalDate to, List<Day> days
                       List<OwnerBlockResponse> blocks, List<Visit> visits) {
     }
 
-    // previousReservationId·travelMinutes·bufferMinutes·slackMinutes·travelStatus는 VisitTimeline.PlannedVisit 그대로
+    // 이전 방문 ID·이동시간·거리(m)·여유시간·충돌 상태는 VisitTimeline.PlannedVisit 그대로
     // activeChange: 진행 중 변경 요청·제안 (없으면 null)
     public record Visit(Long reservationId, ReservationStatus status, OffsetDateTime startAt, OffsetDateTime endAt,
                         int workMinutes, boolean isManual, WorkCategory workCategory, Long inquiryId,
                         String customerName, String customerPhone, String address, Long previousReservationId,
-                        Integer travelMinutes, Integer bufferMinutes, Integer slackMinutes, TravelStatus travelStatus,
+                        Integer travelMinutes, Integer travelDistanceMeters, Integer bufferMinutes,
+                        Integer slackMinutes, TravelStatus travelStatus,
                         ActiveChange activeChange) {
     }
 

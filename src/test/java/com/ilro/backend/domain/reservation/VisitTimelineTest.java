@@ -8,6 +8,7 @@ import com.ilro.backend.domain.reservation.service.VisitTimeline.DayPlan;
 import com.ilro.backend.domain.reservation.service.VisitTimeline.PlannedVisit;
 import com.ilro.backend.domain.reservation.service.VisitTimeline.TravelStatus;
 import com.ilro.backend.infra.map.GeoPoint;
+import com.ilro.backend.infra.map.MapClient.TravelEstimate;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -130,7 +131,8 @@ class VisitTimelineTest {
     private DayPlan plan(ScheduleDay day) {
         return VisitTimeline.plan(day, new TravelTimes((from, to) -> {
             asked.add(List.of(from, to));
-            return minutes.getOrDefault(List.of(from, to), OptionalInt.of(20));
+            return minutes.getOrDefault(List.of(from, to), OptionalInt.of(20))
+                    .stream().mapToObj(value -> new TravelEstimate(value, null)).findFirst();
         }));
     }
 

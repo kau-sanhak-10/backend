@@ -97,9 +97,9 @@ public class OwnerWorkTypeService {
                 .map(category -> {
                     OwnerWorkType workType = saved.get(category);
                     return workType == null
-                            ? new WorkTypeSettings.WorkType(category, false, DEFAULT_DURATION_MINUTES, false)
+                            ? new WorkTypeSettings.WorkType(category, false, DEFAULT_DURATION_MINUTES, false, null)
                             : new WorkTypeSettings.WorkType(category, workType.isActive(),
-                            workType.getDurationMinutes(), workType.isAutoBookingAllowed());
+                            workType.getDurationMinutes(), workType.isAutoBookingAllowed(), workType.getId());
                 })
                 .toList());
     }
