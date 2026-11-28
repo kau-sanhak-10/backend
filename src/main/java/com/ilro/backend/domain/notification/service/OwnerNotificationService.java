@@ -3,6 +3,7 @@ package com.ilro.backend.domain.notification.service;
 import com.ilro.backend.domain.notification.dto.OwnerNotificationListResponse;
 import com.ilro.backend.domain.notification.entity.Notification;
 import com.ilro.backend.domain.notification.entity.NotificationChannel;
+import com.ilro.backend.domain.notification.entity.NotificationEventType;
 import com.ilro.backend.domain.notification.entity.NotificationRecipient;
 import com.ilro.backend.domain.notification.exception.NotificationErrorCode;
 import com.ilro.backend.domain.notification.repository.NotificationRepository;
@@ -21,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 // 사장님 업무 알림 목록·읽음 (B-26, BE-14)
 // 목록은 사장님 몫의 앱 안 알림(OWNER·IN_APP)만 - 같은 사건의 푸시 행은 발송용이라 보여 주지 않음
@@ -46,7 +48,7 @@ public class OwnerNotificationService {
                 NotificationRecipient.OWNER, NotificationChannel.IN_APP, pageable)
                 : notificationRepository.findByOwnerIdAndRecipientAndChannel(principal.ownerId(),
                 NotificationRecipient.OWNER, NotificationChannel.IN_APP, pageable);
-        return OwnerNotificationListResponse.from(found);
+        return OwnerNotificationListResponse.from(found, safetyIds(found.getContent()));
     }
 
     // 이미 읽었으면 처음 읽은 시각 그대로 200 (두 번 눌러도 같은 결과)
@@ -56,7 +58,15 @@ public class OwnerNotificationService {
                         principal.ownerId(), NotificationRecipient.OWNER, NotificationChannel.IN_APP)
                 .orElseThrow(() -> new BusinessException(NotificationErrorCode.NOTIFICATION_NOT_FOUND));
         notification.markRead(clock.instant());
-        return OwnerNotificationListResponse.Item.from(notification);
+        return OwnerNotificationListResponse.Item.from(notification,
+                safetyIds(List.of(notification)).contains(notificationId));
+    }
+
+    private Set<Long> safetyIds(List<Notification> notifications) {
+        List<Long> ids = notifications.stream()
+                .filter(notification -> notification.getEventType() == NotificationEventType.NEEDS_CHECK)
+                .map(Notification::getId).toList();
+        return ids.isEmpty() ? Set.of() : notificationRepository.findSafetyNotificationIds(ids);
     }
 
     // 문의 목록(B-12)과 같은 기준 - 최신순(id 내림차순)

@@ -945,6 +945,25 @@ class AiAnalysisFlowTest {
                 .containsEntry("safety_flag", true);
         assertThat(notifications(session)).isEqualTo(1);
         assertThat(aiMessages(session)).isEqualTo(1);
+
+        long alertId = jdbc.queryForObject(
+                "SELECT id FROM notification WHERE ref_id = ? AND channel = 'IN_APP'", Long.class, session.inquiryId());
+        // 앞선 일반 알림은 동일 문의가 안전 상태가 되더라도 안전 알림으로 바꾸지 않는다.
+        jdbc.update("""
+                INSERT INTO notification(owner_id, recipient, event_type, ref_type, ref_id, channel, dedupe_key)
+                VALUES (?, 'OWNER', 'NEEDS_CHECK', 'INQUIRY', ?, 'IN_APP', ?)
+                """, ownerId, session.inquiryId(), "NEEDS_CHECK:INQUIRY:" + session.inquiryId() + ":0");
+        String ownerToken = accounts.ownerToken(ownerId);
+        getAs(ownerToken, "/api/v1/owner/notifications")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.content[0].refId").value(session.inquiryId()))
+                .andExpect(jsonPath("$.result.content[0].safety").value(false))
+                .andExpect(jsonPath("$.result.content[1].notificationId").value(alertId))
+                .andExpect(jsonPath("$.result.content[1].safety").value(true));
+        postAs(ownerToken, "/api/v1/owner/notifications/" + alertId + "/read", "{}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.safety").value(true));
+        assertThat(inquiry(session)).containsEntry("status", "OWNER_CHECK");
     }
 
     @ParameterizedTest(name = "{0} → {2}")
