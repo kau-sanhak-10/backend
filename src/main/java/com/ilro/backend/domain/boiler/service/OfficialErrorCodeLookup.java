@@ -25,7 +25,7 @@ import java.util.regex.Pattern;
 @Service
 public class OfficialErrorCodeLookup {
 
-    // 비교할 때 무시하는 글자 - 띄어쓰기·하이픈·괄호·점·슬래시·밑줄·가운뎃점 (V4 model_key와 같은 규칙)
+    // 비교할 때 무시하는 글자 - 띄어쓰기·하이픈·괄호·점·슬래시·밑줄·가운뎃점 (V8 model_key와 같은 규칙)
     private static final Pattern IGNORED = Pattern.compile("[\\s()/._·-]");
     private static final Pattern CODE_IGNORED = Pattern.compile("[\\s_:-]");
     private static final Pattern THREE_DIGITS = Pattern.compile("\\d{3}");

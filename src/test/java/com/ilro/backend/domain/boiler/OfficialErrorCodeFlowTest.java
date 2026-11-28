@@ -36,7 +36,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-// 오류코드 공식 설명 (AI-14) - V4로 넣은 귀뚜라미 매뉴얼 자료와 사장님 문의 상세(B-13)의 officialErrorCode
+// 오류코드 공식 설명 (AI-14) - V8로 넣은 귀뚜라미 매뉴얼 자료와 사장님 문의 상세(B-13)의 officialErrorCode
 @SpringBootTest
 class OfficialErrorCodeFlowTest {
 
