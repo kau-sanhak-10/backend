@@ -172,6 +172,9 @@ class AdminPrivacyFlowTest {
         Seeded seeded = closedInquiry();
         jdbc.update("UPDATE inquiry SET status = 'BOOKED' WHERE id = ?", seeded.inquiryId());
         long reservationId = reservation(seeded, "COMPLETED");
+        String phone = customerPhone(seeded);
+        verification(phone, "RESERVATION_LOOKUP", ownerId);
+        String lookupToken = customerToken(ownerId, phone, "RESERVATION_LOOKUP");
 
         delete(superAdmin, body("CUSTOMER_REQUEST", seeded.inquiryId()))
                 .andExpect(status().isOk())
@@ -184,6 +187,52 @@ class AdminPrivacyFlowTest {
         assertThat(jdbc.queryForObject("SELECT r.status || '/' || r.address || '/' || c.name FROM reservation r "
                 + "JOIN customer c ON c.id = r.customer_id WHERE r.id = ?", String.class, reservationId))
                 .isEqualTo("COMPLETED/경기 고양시 덕양구 화정로 1/김고객");
+        // 고객이 남았으니 예약 조회 인증 기록과 고객 토큰도 그대로 - 남은 예약을 계속 볼 수 있음
+        assertThat(verifications(phone, ownerId, "RESERVATION_LOOKUP")).isEqualTo(1);
+        getAs(lookupToken, "/api/v1/customer/reservations")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.reservations[0].reservationId").value(reservationId));
+    }
+
+    @Test
+    @DisplayName("고객을 지우면 - 그 업체에서 그 번호로 받은 상담 복구·예약 조회 인증 기록과 고객 토큰도 지움, "
+            + "다른 업체·다른 번호·사장님 로그인 인증은 그대로")
+    void customerPhoneTraces() throws Exception {
+        Seeded seeded = closedInquiry();
+        String phone = customerPhone(seeded);
+        long otherOwner = accounts.approvedOwner(accounts.newPhone());
+        String otherPhone = accounts.newPhone();
+        // 이 업체에서 그 번호로 받은 상담 복구·예약 조회 인증과, 그 인증으로 받은 고객 토큰
+        verification(phone, "INQUIRY_ACCESS", ownerId);
+        verification(phone, "RESERVATION_LOOKUP", ownerId);
+        String recoveryToken = customerToken(ownerId, phone, "INQUIRY_ACCESS");
+        String lookupToken = customerToken(ownerId, phone, "RESERVATION_LOOKUP");
+        // 건드리면 안 되는 것 - 같은 번호의 다른 업체, 이 업체의 다른 번호, 같은 번호로 받은 사장님 로그인 인증
+        verification(phone, "RESERVATION_LOOKUP", otherOwner);
+        String otherOwnerToken = customerToken(otherOwner, phone, "RESERVATION_LOOKUP");
+        verification(otherPhone, "RESERVATION_LOOKUP", ownerId);
+        String otherPhoneToken = customerToken(ownerId, otherPhone, "RESERVATION_LOOKUP");
+        verification(phone, "OWNER_LOGIN", ownerId);
+        getAs(recoveryToken, "/api/v1/customer/inquiries").andExpect(status().isOk());
+        getAs(lookupToken, "/api/v1/customer/reservations").andExpect(status().isOk());
+
+        delete(superAdmin, body("CUSTOMER_REQUEST", seeded.inquiryId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.deleted[0].customerDeleted").value(true));
+
+        // 번호가 적힌 인증 기록과 고객 토큰이 남지 않고, 그 토큰으로는 더 볼 수 없음
+        assertThat(verifications(phone, ownerId, "INQUIRY_ACCESS")).isZero();
+        assertThat(verifications(phone, ownerId, "RESERVATION_LOOKUP")).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM auth_token WHERE owner_id = ? AND customer_phone = ?",
+                Integer.class, ownerId, phone)).isZero();
+        getAs(recoveryToken, "/api/v1/customer/inquiries").andExpect(status().isUnauthorized());
+        getAs(lookupToken, "/api/v1/customer/reservations").andExpect(status().isUnauthorized());
+        // 다른 업체의 같은 번호, 이 업체의 다른 번호, 사장님 로그인 인증은 그대로
+        assertThat(verifications(phone, otherOwner, "RESERVATION_LOOKUP")).isEqualTo(1);
+        assertThat(verifications(otherPhone, ownerId, "RESERVATION_LOOKUP")).isEqualTo(1);
+        assertThat(verifications(phone, ownerId, "OWNER_LOGIN")).isEqualTo(1);
+        getAs(otherOwnerToken, "/api/v1/customer/reservations").andExpect(status().isOk());
+        getAs(otherPhoneToken, "/api/v1/customer/reservations").andExpect(status().isOk());
     }
 
     @Test
@@ -516,6 +565,27 @@ class AdminPrivacyFlowTest {
                 + "'{\"messages\":[{\"content\":\"온수가 안 나와요\"}]}'::jsonb, '{\"result\":{}}'::jsonb)", inquiryId,
                 messageId);
         return new Seeded(inquiryId, token, customerId, originalKey, resizedKey);
+    }
+
+    private String customerPhone(Seeded seeded) {
+        return jdbc.queryForObject("SELECT phone FROM customer WHERE id = ?", String.class, seeded.customerId());
+    }
+
+    // 업체에 묶인 문자 인증 기록 (상담 복구·예약 조회는 링크의 업체, 사장님 로그인은 그 업체)
+    private void verification(String phone, String purpose, long targetOwnerId) {
+        jdbc.update("INSERT INTO phone_verification (phone, purpose, code_hash, send_status, expires_at, "
+                + "verified_at, target_owner_id) VALUES (?, ?, 'seeded', 'SENT', "
+                + "CURRENT_TIMESTAMP + interval '5 minutes', CURRENT_TIMESTAMP, ?)", phone, purpose, targetOwnerId);
+    }
+
+    private int verifications(String phone, long targetOwnerId, String purpose) {
+        return jdbc.queryForObject("SELECT count(*) FROM phone_verification WHERE phone = ? AND target_owner_id = ? "
+                + "AND purpose = ?", Integer.class, phone, targetOwnerId, purpose);
+    }
+
+    // 번호 인증으로 받은 고객 토큰 (cus_)
+    private String customerToken(long targetOwnerId, String phone, String scope) {
+        return accounts.token("CUSTOMER", targetOwnerId, null, phone, scope, "CURRENT_TIMESTAMP + interval '1 day'");
     }
 
     private long reservation(Seeded seeded, String status) {

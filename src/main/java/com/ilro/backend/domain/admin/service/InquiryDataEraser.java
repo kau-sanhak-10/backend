@@ -20,6 +20,7 @@ import java.util.Optional;
 // 문의 한 건의 고객 데이터를 지움 (O-09, BE-19) - 문의마다 따로 트랜잭션, 문의 행을 잠그고 시작
 // 지우는 것: 대화 내용, 사진(파일과 기록), 접수 항목, AI에 보낸 대화·AI 응답 원문, 회신 요청의 이름·번호,
 //           문의의 방문 주소·증상·제품 정보·AI 요약, 문의 접근 토큰, 그 문의의 문자 인증 기록
+//           고객 이름·번호까지 지울 때는 그 업체에서 그 번호로 받은 상담 복구·예약 조회 인증 기록과 고객 토큰도
 // 남기는 것: 동의 기록(무엇에 언제 동의했는지 - 개인정보 없음), 예약 기록과 그 예약의 고객 이름·번호
 //           (예약 기록의 보관 기준이 정해질 때까지), 알림 기록(대상 번호만 가리킴)
 // 문의 행은 지웠다는 표시(deleted_at)만 남김 - 목록·상세에서 없는 문의로 보임
@@ -117,10 +118,22 @@ public class InquiryDataEraser {
         if (customerId != null) {
             // 고객 행을 잠그고 확인 - 같은 고객의 문의 둘을 동시에 지우면 서로의 (아직 커밋 안 된) 문의가 가리키는 것으로 보여
             // 둘 다 고객을 남기게 됨. 잠그면 뒤에 온 쪽이 앞쪽이 끝난 뒤에 확인해서 지움
-            jdbc.queryForList("SELECT id FROM customer WHERE id = ? FOR UPDATE", customerId);
+            List<Map<String, Object>> customers = jdbc.queryForList(
+                    "SELECT owner_id, phone FROM customer WHERE id = ? FOR UPDATE", customerId);
             customerDeleted = jdbc.update("DELETE FROM customer c WHERE c.id = ? "
                     + "AND NOT EXISTS (SELECT 1 FROM reservation r WHERE r.customer_id = c.id) "
                     + "AND NOT EXISTS (SELECT 1 FROM inquiry i WHERE i.customer_id = c.id)", customerId) > 0;
+            if (customerDeleted) {
+                // 고객이 없어졌으면 그 번호가 적힌 채 남는 것도 지움 - 문의가 아니라 업체·번호에 묶여 있어 위에서 지워지지 않음
+                //   상담 복구·예약 조회 문자 인증 기록, 그 인증으로 받은 고객 토큰(번호가 적혀 있어 끊지 않고 지움)
+                // 같은 번호라도 다른 업체의 고객, 사장님·운영자 로그인 인증은 건드리지 않음
+                Map<String, Object> customer = customers.getFirst();
+                jdbc.update("DELETE FROM phone_verification WHERE phone = ? AND target_owner_id = ? "
+                        + "AND purpose IN ('INQUIRY_ACCESS', 'RESERVATION_LOOKUP')",
+                        customer.get("phone"), customer.get("owner_id"));
+                jdbc.update("DELETE FROM auth_token WHERE token_type = 'CUSTOMER' AND owner_id = ? "
+                        + "AND customer_phone = ?", customer.get("owner_id"), customer.get("phone"));
+            }
         }
         if (exists("SELECT 1 FROM reservation WHERE inquiry_id = ?", inquiryId)
                 || (customerId != null && exists("SELECT 1 FROM reservation WHERE customer_id = ?", customerId))) {
