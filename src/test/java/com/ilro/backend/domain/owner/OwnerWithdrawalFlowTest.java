@@ -194,6 +194,8 @@ class OwnerWithdrawalFlowTest {
                     boolean waitingOnOwnerLock = false;
                     long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(2500);
                     while (!waitingOnOwnerLock && !starting.isDone() && System.nanoTime() < deadline) {
+                        // pg_stat_activity는 한 트랜잭션 안에서 처음 읽은 내용을 끝까지 돌려줌 - 확인할 때마다 비우고 새로 읽음
+                        jdbc.execute("SELECT pg_stat_clear_snapshot()");
                         // 이 트랜잭션(탈퇴)이 끝나기를 기다리는 다른 연결의 조회(select ... for update)가 있는지
                         waitingOnOwnerLock = jdbc.queryForObject("SELECT count(*) FROM pg_locks l "
                                 + "JOIN pg_stat_activity a ON a.pid = l.pid WHERE NOT l.granted "
