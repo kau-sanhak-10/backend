@@ -44,14 +44,14 @@ class MigrationUpgradeTest {
     void migratesEmptyDatabase() {
         flyway(null).migrate();
 
-        assertThat(currentVersion()).isEqualTo("7");
+        assertThat(currentVersion()).isEqualTo("8");
         assertThat(jdbc.queryForObject(
                 "SELECT count(*) FROM information_schema.tables WHERE table_schema = ? AND table_name <> "
-                        + "'flyway_schema_history'", Integer.class, SCHEMA)).isEqualTo(23);
+                        + "'flyway_schema_history'", Integer.class, SCHEMA)).isEqualTo(26);
     }
 
     @Test
-    @DisplayName("V1 데이터가 있는 DB도 V7까지 올라가며 이전 데이터의 변환 규칙을 유지한다")
+    @DisplayName("V1 데이터가 있는 DB도 V8까지 올라가며 이전 데이터의 변환 규칙을 유지한다")
     void migratesV1Data() {
         flyway("1").migrate();
         Instant now = Instant.now();
@@ -102,7 +102,7 @@ class MigrationUpgradeTest {
 
         flyway(null).migrate();
 
-        assertThat(currentVersion()).isEqualTo("7");
+        assertThat(currentVersion()).isEqualTo("8");
         // V7: 기존 작업 메모는 그대로, 같은 예약에 두 번째 메모는 막음
         assertThat(jdbc.queryForObject("SELECT content FROM " + S + "work_note WHERE reservation_id = ?",
                 String.class, keyed)).isEqualTo("배기통 점검 필요");
